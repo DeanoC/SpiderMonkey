@@ -2,9 +2,9 @@
 
 Two namespaces cover agent topology management:
 
-- `/global/agents` for agent inventory and creation
-- `/global/sub_brains` for per-agent sub-brain lifecycle
-- `/global/workspaces` for workspace list/get/up bootstrap and lifecycle operations
+- `/services/agents` for agent inventory and creation when bound, otherwise the discovered agents service path
+- `/nodes/<worker-id>/venoms/sub_brains` for worker-private sub-brain lifecycle
+- `/services/workspaces` for workspace list/get/up lifecycle operations when bound, otherwise the discovered workspaces service path
 
 Common operation mapping:
 

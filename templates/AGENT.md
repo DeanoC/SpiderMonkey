@@ -30,7 +30,7 @@ Use this file for behavior and thinking loop discipline; use `CORE.md` for exact
 
 If you have little or no history:
 1. Extract objective from latest user request.
-2. Discover capabilities via `VENOMS.json`.
+2. Discover capabilities via `/meta/workspace_services.json` and `/meta/venom_packages.json` first, then fall back to `VENOMS.json`.
 3. Execute the smallest concrete next tool step.
 4. If waiting is required, use event/job waits via filesystem paths.
 

@@ -2,8 +2,8 @@
 
 Spiderweb exposes two search-oriented agent namespaces:
 
-- `/global/web_search`
-- `/global/search_code`
+- `/services/web_search` when bound, otherwise the discovered `web_search` Venom path
+- `/services/search_code` when bound, otherwise the discovered `search_code` Venom path
 
 Both support:
 

@@ -43,10 +43,11 @@ Rules:
 ## Cold-Start Checklist (No History)
 When created without useful history, follow this order:
 1. Treat the latest user request as the active objective.
-2. Read `/global/venoms/VENOMS.json` to discover currently available capabilities.
-3. Validate exact invoke/operation shapes from service contract files before writing control payloads.
-4. Execute the smallest concrete next step with one tool call.
-5. If blocked on external events, wait via Acheron event/job paths.
+2. Read `/meta/workspace_services.json` and `/meta/venom_packages.json` to discover effective services and available Venom packages.
+3. Fall back to `/projects/<project_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json` when needed.
+4. Validate exact invoke/operation shapes from service contract files before writing control payloads.
+5. Execute the smallest concrete next step with one tool call.
+6. If blocked on external events, wait via Acheron event/job paths.
 
 ## Acheron-First Tooling Rule
 Use Acheron filesystem operations as the primary control surface. Acheron is a Plan9/STYX style rpc over filesystem.
@@ -102,7 +103,15 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
 - These paths are observational. Do not treat them as user messages.
 
 ### Acheron Venom Discovery Paths
-- Discover Venoms at `/global/venoms/VENOMS.json`.
+- Preferred discovery order:
+  - `/meta/workspace_services.json`
+  - `/meta/venom_packages.json`
+  - `/projects/<project_id>/meta/mounted_services.json`
+  - `/nodes/local/venoms/VENOMS.json`
+  - `/global/venoms/VENOMS.json`
+- `/meta/workspace_services.json` describes effective service binds for the current mounted workspace.
+- `/meta/venom_packages.json` describes available Venom packages, categories, requirements, and projection modes.
+- `VENOMS.json` files remain instance catalogs and compatibility indexes.
 - Each Venom entry includes:
   - `node_id`, `venom_id`, `venom_path`, `invoke_path`, `has_invoke`, `scope`.
 - Scope selection:
@@ -113,11 +122,12 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
   - read `README.md`, `SCHEMA.json`, `CAPS.json`, `OPS.json`, `PERMISSIONS.json`
   - only invoke when `has_invoke` is `true`
 - Example:
-  - read `/global/venoms/VENOMS.json`
-  - pick entry `{ "venom_id":"terminal", "invoke_path":"/global/terminal/control/invoke.json", "scope":"project_namespace" }`
-  - read `/global/terminal/SCHEMA.json` and `/global/terminal/control/README.md`
-  - write payload to `/global/terminal/control/invoke.json`
-  - read `/global/terminal/status.json` and `/global/terminal/result.json`
+  - read `/meta/workspace_services.json`
+  - pick a `terminal` service entry and use its `invoke_path` when present
+  - if needed, read `/meta/venom_packages.json` for package requirements and categories
+  - read `/services/terminal/SCHEMA.json` and `/services/terminal/control/README.md`
+  - write payload to `/services/terminal/control/invoke.json`
+  - read `/services/terminal/status.json` and `/services/terminal/result.json`
 - Detailed reference and advanced usage:
   - `/global/library/topics/service-discovery.md`
   - `/global/library/topics/search-services.md`
@@ -131,7 +141,7 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
 ## Memory Model
 - LTM is durable and versioned.
 - Active Memory is your current working context.
-- Operate on memory through `/global/memory/control/*.json`.
+- Operate on memory through your worker-owned memory venom, typically `/nodes/<worker-id>/venoms/memory/control/*.json`.
 - For targeted operations (`load`, `mutate`, `evict`, `versions`), pass `memory_path`.
 - `memory_path` resolves the latest version unless you provide a path to a specific version identity.
 - Minimize churn: mutate with intent.
@@ -141,8 +151,8 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
 - Be concise, concrete, and tool-first.
 - Prefer deterministic edits and verifiable actions.
 - For filesystem inspection, use `file_list`/`file_read` first.
-- For code search, discover the `search_code` Venom in `/global/venoms/VENOMS.json`, then invoke its advertised `control/*.json` path.
-- Do not invent direct execution tools; use `/global/terminal/control/*.json` when terminal execution is required.
+- For code search, prefer `/meta/workspace_services.json`, then fall back to `/nodes/local/venoms/VENOMS.json` or `/global/venoms/VENOMS.json`, and invoke the advertised `control/*.json` path.
+- Do not invent direct execution tools; use `/services/terminal/control/*.json` when bound, otherwise the discovered terminal invoke path.
 - When a tool result contains `error.code`/`error.message`, treat it as authoritative runtime state.
 - On tool failure, either:
   - report the exact error to the user and stop, or
