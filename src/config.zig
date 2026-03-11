@@ -230,7 +230,10 @@ fn resolveSandboxPathDefaults(allocator: std.mem.Allocator) !SandboxPathDefaults
 }
 
 pub fn init(allocator: std.mem.Allocator, config_path: ?[]const u8) !Config {
-    const path = config_path orelse try defaultConfigPath(allocator);
+    const path = if (config_path) |value|
+        try allocator.dupe(u8, value)
+    else
+        try defaultConfigPath(allocator);
     var sandbox_defaults = try resolveSandboxPathDefaults(allocator);
     defer sandbox_defaults.deinit(allocator);
 
@@ -908,6 +911,7 @@ test "Config defaults" {
     const tmp_root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_root);
     const cfg_path = try std.fs.path.join(allocator, &.{ tmp_root, "config.json" });
+    defer allocator.free(cfg_path);
 
     var config = try Config.init(allocator, cfg_path);
     defer config.deinit();
@@ -941,6 +945,7 @@ test "Config setProvider clears model when null requested" {
     const tmp_root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_root);
     const cfg_path = try std.fs.path.join(allocator, &.{ tmp_root, "config.json" });
+    defer allocator.free(cfg_path);
 
     var config = try Config.init(allocator, cfg_path);
     defer config.deinit();
@@ -960,6 +965,7 @@ test "Config setProvider safely reuses current model pointer" {
     const tmp_root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_root);
     const cfg_path = try std.fs.path.join(allocator, &.{ tmp_root, "config.json" });
+    defer allocator.free(cfg_path);
 
     var config = try Config.init(allocator, cfg_path);
     defer config.deinit();
@@ -977,6 +983,7 @@ test "Config ignores deprecated runtime.sandbox_enabled field and does not persi
     const tmp_root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_root);
     const cfg_path = try std.fs.path.join(allocator, &.{ tmp_root, "config.json" });
+    defer allocator.free(cfg_path);
 
     var config = try Config.init(allocator, cfg_path);
     defer config.deinit();
@@ -1012,6 +1019,7 @@ test "Config validation rejects overlapping sandbox roots" {
     const tmp_root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_root);
     const cfg_path = try std.fs.path.join(allocator, &.{ tmp_root, "config.json" });
+    defer allocator.free(cfg_path);
 
     var config = try Config.init(allocator, cfg_path);
     defer config.deinit();
@@ -1032,6 +1040,7 @@ test "Config validation rejects empty rootfs base ref" {
     const tmp_root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(tmp_root);
     const cfg_path = try std.fs.path.join(allocator, &.{ tmp_root, "config.json" });
+    defer allocator.free(cfg_path);
 
     var config = try Config.init(allocator, cfg_path);
     defer config.deinit();
