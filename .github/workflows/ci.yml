@@ -1,0 +1,15 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    uses: DeanoC/Spiderweb/.github/workflows/ziggy-shared-ci.yml@main
+    with:
+      verify_script: |
+        grep -q '\.name = \.spider_monkey' build.zig.zon
+        grep -q '\.version = ' build.zig.zon
