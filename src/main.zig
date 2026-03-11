@@ -2,6 +2,8 @@ const std = @import("std");
 const runtime_worker = @import("runtime_worker.zig");
 
 const default_interval_ms: u64 = 5_000;
+const once_scan_retry_ms: u64 = 500;
+const max_once_scan_attempts: usize = 8;
 
 const max_preview_bytes: usize = 96;
 const max_recent_jobs_to_scan: usize = 4;
@@ -231,14 +233,16 @@ fn runScanner(
     worker_registration: ?WorkerRegistration,
     runtime: ?*runtime_worker.RuntimeWorker,
 ) !void {
+    var once_attempt: usize = 0;
     while (true) {
         if (worker_registration) |registration| {
             try sendWorkerHeartbeat(allocator, registration);
         }
         var pre_report = try scanWorkspace(allocator, workspace_root);
         defer if (once) pre_report.deinit(allocator);
+        var processed: usize = 0;
         if (!scan_only) {
-            const processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs, runtime);
+            processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs, runtime);
             if (processed > 0) {
                 var out = std.fs.File.stdout();
                 const line = try std.fmt.allocPrint(allocator, "processed_jobs: {d}\n", .{processed});
@@ -248,6 +252,11 @@ fn runScanner(
         }
 
         if (once) {
+            once_attempt += 1;
+            if (!scan_only and processed == 0 and shouldRetryOnceScan(&pre_report) and once_attempt < max_once_scan_attempts) {
+                std.Thread.sleep(once_scan_retry_ms * std.time.ns_per_ms);
+                continue;
+            }
             if (scan_only) {
                 try printScanReport(allocator, &pre_report);
             }
@@ -261,6 +270,15 @@ fn runScanner(
 
         std.Thread.sleep(interval_ms * std.time.ns_per_ms);
     }
+}
+
+fn shouldRetryOnceScan(report: *const ScanReport) bool {
+    if (!report.services_jobs_exists) return false;
+    if (report.job_dir_count == 0) return true;
+    for (report.jobs) |job| {
+        if (std.mem.eql(u8, job.state, "queued")) return true;
+    }
+    return false;
 }
 
 fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !ScanReport {
@@ -824,7 +842,7 @@ fn processSingleQueuedJob(
 }
 
 fn writeFileReplacing(path: []const u8, content: []const u8) !void {
-    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |err| switch (err) {
+    var file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| switch (err) {
         error.FileNotFound => try std.fs.cwd().createFile(path, .{ .truncate = true }),
         else => return err,
     };
@@ -1104,6 +1122,24 @@ test "processQueuedJobs completes queued workspace job" {
     const result_after = try std.fs.cwd().readFileAlloc(allocator, result_path, 4 * 1024);
     defer allocator.free(result_after);
     try std.testing.expectEqualStrings("Spider Monkey received: hello from test", result_after);
+}
+
+test "writeFileReplacing truncates existing content" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const root = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/status.json", .{root});
+    defer allocator.free(file_path);
+
+    try writeFileReplacing(file_path, "{\"state\":\"running\",\"error\":null}");
+    try writeFileReplacing(file_path, "{\"state\":\"done\"}");
+
+    const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024);
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("{\"state\":\"done\"}", content);
 }
 
 test "ensureAgentHome claims and bootstraps agent home directories" {

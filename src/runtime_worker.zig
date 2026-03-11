@@ -462,11 +462,13 @@ fn handleFileRead(
     const requested_path = requiredString(args, "path") orelse return toolFailure(allocator, .invalid_params, "missing required parameter: path");
     const max_bytes = parseUsize(args, "max_bytes", 128 * 1024) orelse return toolFailure(allocator, .invalid_params, "max_bytes must be a non-negative integer");
     const wait_until_ready = parseBool(args, "wait_until_ready", true) orelse return toolFailure(allocator, .invalid_params, "wait_until_ready must be boolean");
-    const local_path = resolveToolPath(self, allocator, requested_path) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+    const local_path = resolveToolPath(self, allocator, requested_path) catch |err| {
+        return toolFailurePathError(allocator, .execution_failed, "file_read", requested_path, requested_path, err);
+    };
     defer allocator.free(local_path);
 
     const content = std.fs.cwd().readFileAlloc(allocator, local_path, max_bytes) catch |err| {
-        return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        return toolFailurePathError(allocator, .execution_failed, "file_read", requested_path, local_path, err);
     };
     defer allocator.free(content);
     const escaped_content = jsonEscape(allocator, content) catch return toolFailure(allocator, .execution_failed, "out of memory");
@@ -495,34 +497,59 @@ fn handleFileWrite(
     const append = parseBool(args, "append", false) orelse return toolFailure(allocator, .invalid_params, "append must be boolean");
     const create_parents = parseBool(args, "create_parents", true) orelse return toolFailure(allocator, .invalid_params, "create_parents must be boolean");
     const wait_until_ready = parseBool(args, "wait_until_ready", true) orelse return toolFailure(allocator, .invalid_params, "wait_until_ready must be boolean");
-    const local_path = resolveToolPath(self, allocator, requested_path) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+    const local_path = resolveToolPath(self, allocator, requested_path) catch |err| {
+        return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, requested_path, err);
+    };
     defer allocator.free(local_path);
 
     if (create_parents) {
-        ensureAbsoluteParentDir(local_path) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        ensureAbsoluteParentDir(local_path) catch |err| {
+            return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, local_path, err);
+        };
     }
 
     if (append) {
-        var file = std.fs.createFileAbsolute(local_path, .{ .truncate = false }) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        var file = std.fs.createFileAbsolute(local_path, .{ .truncate = false }) catch |err| {
+            return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, local_path, err);
+        };
         defer file.close();
-        file.seekFromEnd(0) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
-        file.writeAll(content) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        file.seekFromEnd(0) catch |err| return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, local_path, err);
+        file.writeAll(content) catch |err| return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, local_path, err);
     } else {
-        var file = std.fs.createFileAbsolute(local_path, .{ .truncate = true }) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        var file = std.fs.createFileAbsolute(local_path, .{ .truncate = true }) catch |err| {
+            return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, local_path, err);
+        };
         defer file.close();
-        file.writeAll(content) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        file.writeAll(content) catch |err| return toolFailurePathError(allocator, .execution_failed, "file_write", requested_path, local_path, err);
     }
 
-    const payload = std.fmt.allocPrint(
-        allocator,
-        "{{\"path\":\"{s}\",\"bytes_written\":{d},\"append\":{s},\"ready\":true,\"wait_until_ready\":{s}}}",
-        .{
-            requested_path,
-            content.len,
-            if (append) "true" else "false",
-            if (wait_until_ready) "true" else "false",
-        },
-    ) catch return toolFailure(allocator, .execution_failed, "out of memory");
+    const payload = blk: {
+        if (isChatReplyPath(requested_path)) {
+            const escaped_content = jsonEscape(allocator, content) catch return toolFailure(allocator, .execution_failed, "out of memory");
+            defer allocator.free(escaped_content);
+            break :blk std.fmt.allocPrint(
+                allocator,
+                "{{\"path\":\"{s}\",\"bytes_written\":{d},\"append\":{s},\"ready\":true,\"wait_until_ready\":{s},\"chat_reply\":{{\"content\":\"{s}\"}}}}",
+                .{
+                    requested_path,
+                    content.len,
+                    if (append) "true" else "false",
+                    if (wait_until_ready) "true" else "false",
+                    escaped_content,
+                },
+            ) catch return toolFailure(allocator, .execution_failed, "out of memory");
+        }
+        break :blk std.fmt.allocPrint(
+            allocator,
+            "{{\"path\":\"{s}\",\"bytes_written\":{d},\"append\":{s},\"ready\":true,\"wait_until_ready\":{s}}}",
+            .{
+                requested_path,
+                content.len,
+                if (append) "true" else "false",
+                if (wait_until_ready) "true" else "false",
+            },
+        ) catch return toolFailure(allocator, .execution_failed, "out of memory");
+    };
     return .{ .success = .{ .payload_json = payload } };
 }
 
@@ -535,7 +562,9 @@ fn handleFileList(
     const recursive = parseBool(args, "recursive", false) orelse return toolFailure(allocator, .invalid_params, "recursive must be boolean");
     const max_entries = parseUsize(args, "max_entries", 500) orelse return toolFailure(allocator, .invalid_params, "max_entries must be integer");
     const effective_max = @min(max_entries, 5_000);
-    const local_path = resolveToolPath(self, allocator, requested_path) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+    const local_path = resolveToolPath(self, allocator, requested_path) catch |err| {
+        return toolFailurePathError(allocator, .execution_failed, "file_list", requested_path, requested_path, err);
+    };
     defer allocator.free(local_path);
 
     var entries = std.ArrayListUnmanaged(u8){};
@@ -549,11 +578,13 @@ fn handleFileList(
     var first = true;
 
     if (recursive) {
-        var walk_dir = std.fs.openDirAbsolute(local_path, .{ .iterate = true }) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        var walk_dir = std.fs.openDirAbsolute(local_path, .{ .iterate = true }) catch |err| {
+            return toolFailurePathError(allocator, .execution_failed, "file_list", requested_path, local_path, err);
+        };
         defer walk_dir.close();
-        var walker = walk_dir.walk(allocator) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        var walker = walk_dir.walk(allocator) catch |err| return toolFailurePathError(allocator, .execution_failed, "file_list", requested_path, local_path, err);
         defer walker.deinit();
-        while (walker.next() catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err))) |entry| {
+        while (walker.next() catch |err| return toolFailurePathError(allocator, .execution_failed, "file_list", requested_path, local_path, err)) |entry| {
             if (count >= effective_max) {
                 truncated = true;
                 break;
@@ -564,10 +595,12 @@ fn handleFileList(
             appendListingEntry(allocator, &entries, entry.path, entry.kind) catch return toolFailure(allocator, .execution_failed, "out of memory");
         }
     } else {
-        var dir = std.fs.openDirAbsolute(local_path, .{ .iterate = true }) catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err));
+        var dir = std.fs.openDirAbsolute(local_path, .{ .iterate = true }) catch |err| {
+            return toolFailurePathError(allocator, .execution_failed, "file_list", requested_path, local_path, err);
+        };
         defer dir.close();
         var iter = dir.iterate();
-        while (iter.next() catch |err| return toolFailureOwned(allocator, .execution_failed, @errorName(err))) |entry| {
+        while (iter.next() catch |err| return toolFailurePathError(allocator, .execution_failed, "file_list", requested_path, local_path, err)) |entry| {
             if (count >= effective_max) {
                 truncated = true;
                 break;
@@ -638,7 +671,14 @@ fn parseUsize(args: std.json.ObjectMap, key: []const u8, default: usize) ?usize 
 
 fn ensureAbsoluteParentDir(path: []const u8) !void {
     const parent = std.fs.path.dirname(path) orelse return;
-    try std.fs.makeDirAbsolute(parent);
+    try std.fs.cwd().makePath(parent);
+}
+
+fn isChatReplyPath(path: []const u8) bool {
+    const normalized = std.mem.trim(u8, path, " \t\r\n");
+    return std.mem.eql(u8, normalized, "/services/chat/control/reply") or
+        std.mem.eql(u8, normalized, "/global/chat/control/reply") or
+        std.mem.eql(u8, normalized, "/nodes/local/venoms/chat/control/reply");
 }
 
 fn localWorkspacePath(allocator: std.mem.Allocator, workspace_root: []const u8, workspace_path: []const u8) ![]u8 {
@@ -695,6 +735,75 @@ test "resolveToolPath uses agent root for relative paths and workspace root for 
     const absolute = try resolveToolPath(@constCast(&worker), allocator, "/services/chat/control/reply");
     defer allocator.free(absolute);
     try std.testing.expectEqualStrings("/tmp/mount/services/chat/control/reply", absolute);
+}
+
+test "ensureAbsoluteParentDir creates nested parent directories" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+    const target = try std.fs.path.join(allocator, &.{ root, "nested", "deeper", "file.txt" });
+    defer allocator.free(target);
+
+    try ensureAbsoluteParentDir(target);
+
+    const nested = try std.fs.path.join(allocator, &.{ root, "nested", "deeper" });
+    defer allocator.free(nested);
+    try std.fs.accessAbsolute(nested, .{});
+}
+
+test "handleFileWrite returns chat_reply payload for reply targets" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+    const workspace_root = try std.fs.path.join(allocator, &.{ root, "workspace" });
+    defer allocator.free(workspace_root);
+    const agent_root = try std.fs.path.join(allocator, &.{ root, "runtime-agents", "spider-monkey" });
+    defer allocator.free(agent_root);
+    try std.fs.cwd().makePath(workspace_root);
+    try std.fs.cwd().makePath(agent_root);
+
+    const worker = RuntimeWorker{
+        .allocator = allocator,
+        .workspace_root = try allocator.dupe(u8, workspace_root),
+        .workspace_root_real = try allocator.dupe(u8, workspace_root),
+        .agent_id = try allocator.dupe(u8, "spider-monkey"),
+        .emit_debug = false,
+        .server = undefined,
+        .assets_dir = try allocator.dupe(u8, "/tmp/templates"),
+        .agents_dir = try allocator.dupe(u8, "/tmp/runtime-agents"),
+        .agent_root = try allocator.dupe(u8, agent_root),
+        .ltm_directory = try allocator.dupe(u8, "/tmp/state/ltm"),
+    };
+    defer {
+        allocator.free(worker.workspace_root);
+        allocator.free(worker.workspace_root_real);
+        allocator.free(worker.agent_id);
+        allocator.free(worker.assets_dir);
+        allocator.free(worker.agents_dir);
+        allocator.free(worker.agent_root);
+        allocator.free(worker.ltm_directory);
+    }
+
+    var args = std.json.ObjectMap.init(allocator);
+    defer args.deinit();
+    try args.put("path", .{ .string = "/nodes/local/venoms/chat/control/reply" });
+    try args.put("content", .{ .string = "hello from spider monkey" });
+
+    const result = handleFileWrite(@constCast(&worker), allocator, args);
+    defer switch (result) {
+        .success => |success| allocator.free(success.payload_json),
+        .failure => |failure| allocator.free(failure.message),
+    };
+
+    try std.testing.expect(result == .success);
+    try std.testing.expect(std.mem.indexOf(u8, result.success.payload_json, "\"chat_reply\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.success.payload_json, "hello from spider monkey") != null);
 }
 
 test "extractReplyText falls back to terminal error frames" {
@@ -756,6 +865,27 @@ fn toolFailureOwned(
         .failure = .{
             .code = code,
             .message = allocator.dupe(u8, message) catch @panic("out of memory"),
+        },
+    };
+}
+
+fn toolFailurePathError(
+    allocator: std.mem.Allocator,
+    code: tool_registry.ToolErrorCode,
+    op: []const u8,
+    requested_path: []const u8,
+    local_path: []const u8,
+    err: anyerror,
+) tool_registry.ToolExecutionResult {
+    const message = std.fmt.allocPrint(
+        allocator,
+        "{s} failed for path '{s}' (local '{s}'): {s}",
+        .{ op, requested_path, local_path, @errorName(err) },
+    ) catch return toolFailure(allocator, code, @errorName(err));
+    return .{
+        .failure = .{
+            .code = code,
+            .message = message,
         },
     };
 }
