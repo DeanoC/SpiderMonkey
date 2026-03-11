@@ -1,0 +1,5 @@
+{
+  "provider": "openai-codex",
+  "model": "gpt-5.1-codex-mini",
+  "think_level": "low"
+}

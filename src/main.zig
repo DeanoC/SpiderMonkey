@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime_worker = @import("runtime_worker.zig");
 
 const default_interval_ms: u64 = 5_000;
 
@@ -98,6 +99,12 @@ pub fn main() !void {
     var workspace_root: ?[]const u8 = null;
     var agent_id = default_agent_id;
     var worker_id: ?[]const u8 = null;
+    var config_path: ?[]const u8 = null;
+    var provider_name: ?[]const u8 = null;
+    var model_name: ?[]const u8 = null;
+    var api_key: ?[]const u8 = null;
+    var base_url: ?[]const u8 = null;
+    var emit_debug = false;
     var once = false;
     var scan_only = false;
     var interval_ms = default_interval_ms;
@@ -121,6 +128,40 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             worker_id = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--config")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            config_path = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--provider")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            provider_name = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--model")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            model_name = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--api-key")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            api_key = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--base-url")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            base_url = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--emit-debug")) {
+            emit_debug = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--once")) {
@@ -158,8 +199,21 @@ pub fn main() !void {
     defer if (worker_registration) |registration| sendWorkerDetach(allocator, registration) catch {};
     defer if (worker_registration) |*registration| registration.deinit(allocator);
 
-    try printStartupSummary(allocator, root, agent_id, effective_worker_id, once, scan_only, interval_ms, home_claim, worker_registration);
-    try runScanner(allocator, root, once, scan_only, interval_ms, worker_registration);
+    const runtime = if (!scan_only)
+        try runtime_worker.RuntimeWorker.create(allocator, root, agent_id, if (home_claim) |claim| claim.home_path else null, .{
+            .config_path = config_path,
+            .provider_name = provider_name,
+            .model_name = model_name,
+            .api_key = api_key,
+            .base_url = base_url,
+            .emit_debug = emit_debug,
+        })
+    else
+        null;
+    defer if (runtime) |value| value.destroy();
+
+    try printStartupSummary(allocator, root, agent_id, effective_worker_id, once, scan_only, interval_ms, home_claim, worker_registration, runtime != null, emit_debug);
+    try runScanner(allocator, root, once, scan_only, interval_ms, worker_registration, runtime);
 }
 
 fn runScanner(
@@ -169,6 +223,7 @@ fn runScanner(
     scan_only: bool,
     interval_ms: u64,
     worker_registration: ?WorkerRegistration,
+    runtime: ?*runtime_worker.RuntimeWorker,
 ) !void {
     while (true) {
         if (worker_registration) |registration| {
@@ -176,7 +231,7 @@ fn runScanner(
         }
         var pre_report = try scanWorkspace(allocator, workspace_root);
         if (!scan_only) {
-            const processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs);
+            const processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs, runtime);
             if (processed > 0) {
                 var out = std.fs.File.stdout();
                 const line = try std.fmt.allocPrint(allocator, "processed_jobs: {d}\n", .{processed});
@@ -565,12 +620,13 @@ fn processQueuedJobs(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     jobs: []const JobSummary,
+    runtime: ?*runtime_worker.RuntimeWorker,
 ) !usize {
     var processed: usize = 0;
     for (jobs) |job| {
         if (!std.mem.eql(u8, job.state, "queued")) continue;
         const input_text = job.input_text orelse continue;
-        try processSingleQueuedJob(allocator, workspace_root, job.job_path, job.job_id, input_text);
+        try processSingleQueuedJob(allocator, workspace_root, job.job_path, job.job_id, input_text, runtime);
         processed += 1;
     }
     return processed;
@@ -582,6 +638,7 @@ fn processSingleQueuedJob(
     job_path: []const u8,
     job_id: []const u8,
     input_text: []const u8,
+    runtime: ?*runtime_worker.RuntimeWorker,
 ) !void {
     const status_path = try std.fs.path.join(allocator, &.{ job_path, "status.json" });
     defer allocator.free(status_path);
@@ -606,19 +663,52 @@ fn processSingleQueuedJob(
     defer allocator.free(started_log);
     try writeFileReplacing(log_path, started_log);
 
-    const reply = try std.fmt.allocPrint(
-        allocator,
-        "Spider Monkey received: {s}",
-        .{input_text},
-    );
+    const runtime_execution = if (runtime) |active_runtime|
+        active_runtime.executePrompt(input_text) catch |err| {
+            const failure_log = try std.fmt.allocPrint(
+                allocator,
+                "[spider-monkey] picked up {s}\n[spider-monkey] runtime failed: {s}\n",
+                .{ job_id, @errorName(err) },
+            );
+            defer allocator.free(failure_log);
+            try writeFileReplacing(log_path, failure_log);
+
+            const failed_status = try std.fmt.allocPrint(
+                allocator,
+                "{{\"state\":\"failed\",\"correlation_id\":null,\"error\":\"{s}\",\"updated_at_ms\":{d}}}",
+                .{ @errorName(err), std.time.milliTimestamp() },
+            );
+            defer allocator.free(failed_status);
+            try writeFileReplacing(status_path, failed_status);
+            return;
+        }
+    else
+        null;
+    defer if (runtime_execution) |*value| value.deinit(allocator);
+
+    const reply = if (runtime_execution) |value|
+        try allocator.dupe(u8, value.reply_text)
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "Spider Monkey received: {s}",
+            .{input_text},
+        );
     defer allocator.free(reply);
     try writeFileReplacing(result_path, reply);
 
-    const completed_log = try std.fmt.allocPrint(
-        allocator,
-        "[spider-monkey] picked up {s}\n[spider-monkey] completed queued job via external workspace worker\n",
-        .{job_id},
-    );
+    const completed_log = if (runtime_execution) |value|
+        try std.fmt.allocPrint(
+            allocator,
+            "[spider-monkey] picked up {s}\n{s}[spider-monkey] completed queued job via external workspace worker\n",
+            .{ job_id, value.log_text },
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "[spider-monkey] picked up {s}\n[spider-monkey] completed queued job via external workspace worker\n",
+            .{job_id},
+        );
     defer allocator.free(completed_log);
     try writeFileReplacing(log_path, completed_log);
 
@@ -657,6 +747,8 @@ fn printStartupSummary(
     interval_ms: u64,
     home_claim: ?HomeClaim,
     worker_registration: ?WorkerRegistration,
+    runtime_enabled: bool,
+    emit_debug: bool,
 ) !void {
     var out = std.fs.File.stdout();
     try out.writeAll("Spider Monkey\n");
@@ -684,6 +776,24 @@ fn printStartupSummary(
     );
     defer allocator.free(worker_mode_line);
     try out.writeAll(worker_mode_line);
+
+    const runtime_line = try std.fmt.allocPrint(
+        allocator,
+        "runtime: {s}\n",
+        .{if (runtime_enabled) "provider-backed" else "disabled"},
+    );
+    defer allocator.free(runtime_line);
+    try out.writeAll(runtime_line);
+
+    if (runtime_enabled) {
+        const debug_line = try std.fmt.allocPrint(
+            allocator,
+            "emit_debug: {s}\n",
+            .{if (emit_debug) "true" else "false"},
+        );
+        defer allocator.free(debug_line);
+        try out.writeAll(debug_line);
+    }
 
     if (!once) {
         const interval_line = try std.fmt.allocPrint(allocator, "interval_ms: {d}\n", .{interval_ms});
@@ -801,10 +911,10 @@ fn printHelp() !void {
         \\spider-monkey - Spiderweb workspace worker scaffold
         \\
         \\Usage:
-        \\  spider-monkey run --workspace-root <mounted-path> [--agent-id <id>] [--worker-id <id>] [--once] [--scan-only] [--interval-ms <ms>]
+        \\  spider-monkey run --workspace-root <mounted-path> [--agent-id <id>] [--worker-id <id>] [--config <path>] [--provider <name>] [--model <name>] [--api-key <key>] [--base-url <url>] [--emit-debug] [--once] [--scan-only] [--interval-ms <ms>]
         \\
         \\Examples:
-        \\  spider-monkey run --workspace-root /mnt/spiderweb-demo --agent-id spider-monkey --worker-id spider-monkey-a --once
+        \\  spider-monkey run --workspace-root /mnt/spiderweb-demo --agent-id spider-monkey --worker-id spider-monkey-a --provider openai --model gpt-4o-mini --once
         \\  spider-monkey run --workspace-root /mnt/spiderweb-demo --once --scan-only
         \\  spider-monkey run --workspace-root /mnt/spiderweb-demo --interval-ms 5000
         \\
@@ -869,7 +979,7 @@ test "processQueuedJobs completes queued workspace job" {
 
     var report = try scanWorkspace(allocator, root);
     defer report.deinit(allocator);
-    const processed = try processQueuedJobs(allocator, root, report.jobs);
+    const processed = try processQueuedJobs(allocator, root, report.jobs, null);
     try std.testing.expectEqual(@as(usize, 1), processed);
 
     const status_after = try std.fs.cwd().readFileAlloc(allocator, status_path, 4 * 1024);
