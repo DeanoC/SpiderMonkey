@@ -358,7 +358,7 @@ fn ensureWorkerRegistration(
 
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"venoms\":[\"memory\",\"sub_brains\"]}}",
+        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\"}}",
         .{ agent_id, worker_id },
     );
     defer allocator.free(payload);
@@ -374,7 +374,7 @@ fn sendWorkerHeartbeat(allocator: std.mem.Allocator, registration: WorkerRegistr
     defer allocator.free(heartbeat_path);
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"venoms\":[\"memory\",\"sub_brains\"],\"ttl_ms\":30000}}",
+        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"ttl_ms\":30000}}",
         .{ registration.agent_id, registration.worker_id },
     );
     defer allocator.free(payload);
