@@ -186,7 +186,7 @@ const ProviderRuntime = struct {
     http_client: std.http.Client,
     default_provider_name: []u8,
     default_model_name: ?[]u8,
-    test_only_api_key: ?[]u8,
+    configured_api_key: ?[]u8,
     base_url: ?[]u8,
     credentials: credential_store.CredentialStore,
 
@@ -205,7 +205,7 @@ const ProviderRuntime = struct {
             .http_client = .{ .allocator = allocator },
             .default_provider_name = try allocator.dupe(u8, provider_cfg.name),
             .default_model_name = null,
-            .test_only_api_key = null,
+            .configured_api_key = null,
             .base_url = null,
             .credentials = credential_store.CredentialStore.init(allocator),
         };
@@ -222,9 +222,7 @@ const ProviderRuntime = struct {
                 provider.default_model_name = try allocator.dupe(u8, mapped_model);
             }
         }
-        if (builtin.is_test) {
-            if (provider_cfg.api_key) |value| provider.test_only_api_key = try allocator.dupe(u8, value);
-        }
+        if (provider_cfg.api_key) |value| provider.configured_api_key = try allocator.dupe(u8, value);
         if (provider_cfg.base_url) |value| provider.base_url = try allocator.dupe(u8, value);
 
         return provider;
@@ -236,7 +234,7 @@ const ProviderRuntime = struct {
         self.http_client.deinit();
         allocator.free(self.default_provider_name);
         if (self.default_model_name) |value| allocator.free(value);
-        if (self.test_only_api_key) |value| allocator.free(value);
+        if (self.configured_api_key) |value| allocator.free(value);
         if (self.base_url) |value| allocator.free(value);
     }
 };
@@ -4205,11 +4203,9 @@ pub const RuntimeServer = struct {
     }
 
     fn resolveApiKey(self: *RuntimeServer, provider_runtime: *const ProviderRuntime, provider_name: []const u8) ![]const u8 {
+        if (provider_runtime.configured_api_key) |key| return try self.allocator.dupe(u8, key);
         if (provider_runtime.credentials.getProviderApiKey(provider_name)) |key| {
             return key;
-        }
-        if (builtin.is_test) {
-            if (provider_runtime.test_only_api_key) |key| return try self.allocator.dupe(u8, key);
         }
         if (getEnvApiKeyFn(self.allocator, provider_name)) |key| {
             return key;
