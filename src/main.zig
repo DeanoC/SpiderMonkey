@@ -63,9 +63,14 @@ const ScanReport = struct {
     services_exists: bool,
     services_chat_exists: bool,
     services_jobs_exists: bool,
+    services_venom_packages_exists: bool,
     global_chat_exists: bool,
     global_jobs_exists: bool,
     meta_exists: bool,
+    meta_workspace_services_exists: bool,
+    meta_venom_packages_exists: bool,
+    local_venoms_exists: bool,
+    global_venoms_exists: bool,
     jobs_path: ?[]u8,
     job_dir_count: usize,
     jobs: []JobSummary = &.{},
@@ -257,12 +262,22 @@ fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !Scan
     defer allocator.free(services_chat_path);
     const services_jobs_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "jobs" });
     defer allocator.free(services_jobs_path);
+    const services_venom_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "venom_packages" });
+    defer allocator.free(services_venom_packages_path);
     const global_chat_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "chat" });
     defer allocator.free(global_chat_path);
     const global_jobs_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "jobs" });
     defer allocator.free(global_jobs_path);
     const meta_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta" });
     defer allocator.free(meta_path);
+    const meta_workspace_services_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta", "workspace_services.json" });
+    defer allocator.free(meta_workspace_services_path);
+    const meta_venom_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta", "venom_packages.json" });
+    defer allocator.free(meta_venom_packages_path);
+    const local_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, "nodes", "local", "venoms", "VENOMS.json" });
+    defer allocator.free(local_venoms_path);
+    const global_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "venoms", "VENOMS.json" });
+    defer allocator.free(global_venoms_path);
 
     const jobs_exists = pathExists(services_jobs_path);
     const jobs = if (jobs_exists) try scanJobs(allocator, services_jobs_path) else try allocator.alloc(JobSummary, 0);
@@ -271,9 +286,14 @@ fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !Scan
         .services_exists = pathExists(services_path),
         .services_chat_exists = pathExists(services_chat_path),
         .services_jobs_exists = jobs_exists,
+        .services_venom_packages_exists = pathExists(services_venom_packages_path),
         .global_chat_exists = pathExists(global_chat_path),
         .global_jobs_exists = pathExists(global_jobs_path),
         .meta_exists = pathExists(meta_path),
+        .meta_workspace_services_exists = pathExists(meta_workspace_services_path),
+        .meta_venom_packages_exists = pathExists(meta_venom_packages_path),
+        .local_venoms_exists = pathExists(local_venoms_path),
+        .global_venoms_exists = pathExists(global_venoms_path),
         .jobs_path = if (jobs_exists) try allocator.dupe(u8, services_jobs_path) else null,
         .job_dir_count = jobs.len,
         .jobs = jobs,
@@ -860,6 +880,10 @@ fn printScanReport(allocator: std.mem.Allocator, report: *const ScanReport) !voi
     defer allocator.free(services_jobs_line);
     try out.writeAll(services_jobs_line);
 
+    const services_venom_packages_line = try std.fmt.allocPrint(allocator, "  services/venom_packages: {s}\n", .{boolLabel(report.services_venom_packages_exists)});
+    defer allocator.free(services_venom_packages_line);
+    try out.writeAll(services_venom_packages_line);
+
     const global_chat_line = try std.fmt.allocPrint(allocator, "  global/chat: {s}\n", .{boolLabel(report.global_chat_exists)});
     defer allocator.free(global_chat_line);
     try out.writeAll(global_chat_line);
@@ -871,6 +895,22 @@ fn printScanReport(allocator: std.mem.Allocator, report: *const ScanReport) !voi
     const meta_line = try std.fmt.allocPrint(allocator, "  meta: {s}\n", .{boolLabel(report.meta_exists)});
     defer allocator.free(meta_line);
     try out.writeAll(meta_line);
+
+    const meta_workspace_services_line = try std.fmt.allocPrint(allocator, "  meta/workspace_services.json: {s}\n", .{boolLabel(report.meta_workspace_services_exists)});
+    defer allocator.free(meta_workspace_services_line);
+    try out.writeAll(meta_workspace_services_line);
+
+    const meta_venom_packages_line = try std.fmt.allocPrint(allocator, "  meta/venom_packages.json: {s}\n", .{boolLabel(report.meta_venom_packages_exists)});
+    defer allocator.free(meta_venom_packages_line);
+    try out.writeAll(meta_venom_packages_line);
+
+    const local_venoms_line = try std.fmt.allocPrint(allocator, "  nodes/local/venoms/VENOMS.json: {s}\n", .{boolLabel(report.local_venoms_exists)});
+    defer allocator.free(local_venoms_line);
+    try out.writeAll(local_venoms_line);
+
+    const global_venoms_line = try std.fmt.allocPrint(allocator, "  global/venoms/VENOMS.json: {s}\n", .{boolLabel(report.global_venoms_exists)});
+    defer allocator.free(global_venoms_line);
+    try out.writeAll(global_venoms_line);
 
     if (report.jobs_path) |jobs_path| {
         const jobs_path_line = try std.fmt.allocPrint(allocator, "  jobs_path: {s}\n", .{jobs_path});

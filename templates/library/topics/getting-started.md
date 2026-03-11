@@ -1,5 +1,6 @@
 # Getting Started
 
-1. Discover Venoms in `/global/venoms/VENOMS.json`.
-2. Read each Venom `README.md`, `SCHEMA.json`, and `CAPS.json` before using it.
-3. Use `/global/library` for system guides.
+1. Discover effective services in `/meta/workspace_services.json` and available Venom packages in `/meta/venom_packages.json`.
+2. Fall back to `/projects/<project_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json` only when the meta files are insufficient.
+3. Read each Venom `README.md`, `SCHEMA.json`, and `CAPS.json` before using it.
+4. Use `/global/library` for system guides.

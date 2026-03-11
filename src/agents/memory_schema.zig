@@ -34,7 +34,7 @@ pub const POLICY_TEXT =
 
 pub const LOOP_CONTRACT_TEXT =
     \\Run cycle: Observe -> Decide -> Act -> Integrate -> Checkpoint.
-    \\When history is sparse, discover capabilities first via /meta/workspace_services.json, /projects/<project_id>/meta/mounted_services.json, /nodes/local/venoms/VENOMS.json, and /global/venoms/VENOMS.json.
+    \\When history is sparse, discover capabilities first via /meta/workspace_services.json and /meta/venom_packages.json, then /projects/<project_id>/meta/mounted_services.json, /nodes/local/venoms/VENOMS.json, and /global/venoms/VENOMS.json.
     \\If blocked, continue using wait-capable filesystem operations.
     \\Prefer single-source blocking reads for waits (job status/result); use events/control/wait.json + events/next.json only for one-of-many sources.
     \\If tool output is invalid or includes error.code/error.message, emit the smallest corrective tool step.
@@ -47,7 +47,7 @@ pub const TOOL_CONTRACT_TEXT =
     \\Do not use talk_* tools.
     \\Do not call memory_* directly; register or discover a worker-owned memory venom path and use that path instead (for example `/nodes/<worker-node>/venoms/memory/control/*.json`).
     \\Access web search, code search, terminal, agent management, and worker registration through `/services/*` when bound, otherwise `/nodes/local/venoms/*`. Access sub-brains through worker-owned node venoms.
-    \\Before claiming a capability is unavailable, check `/meta/workspace_services.json`, `/projects/<project_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json`.
+    \\Before claiming a capability is unavailable, check `/meta/workspace_services.json`, `/meta/venom_packages.json`, `/projects/<project_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json`.
     \\Use project_namespace for project-shared capabilities and node scope for node-specific capabilities.
     \\If `/services/web_search` or `/nodes/local/venoms/web_search` exists, do not claim you cannot do web search; invoke the web search service.
     \\For "what workspaces/agents exist" requests, use `/services/workspaces/control/list.json` or `/nodes/local/venoms/workspaces/control/list.json`, and `/services/agents/control/list.json` or `/nodes/local/venoms/agents/control/list.json`, not directory-entry inference.
