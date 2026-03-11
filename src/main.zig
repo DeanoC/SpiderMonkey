@@ -4,6 +4,7 @@ const runtime_worker = @import("runtime_worker.zig");
 const default_interval_ms: u64 = 5_000;
 
 const max_preview_bytes: usize = 96;
+const max_recent_jobs_to_scan: usize = 4;
 
 const default_agent_id: []const u8 = "spider-monkey";
 
@@ -201,11 +202,11 @@ pub fn main() !void {
     var home_claim = try ensureAgentHome(allocator, root, agent_id);
     defer if (home_claim) |*claim| claim.deinit(allocator);
     var worker_registration = try ensureWorkerRegistration(allocator, root, agent_id, effective_worker_id);
-    defer if (worker_registration) |registration| sendWorkerDetach(allocator, registration) catch {};
     defer if (worker_registration) |*registration| registration.deinit(allocator);
+    defer if (worker_registration) |registration| sendWorkerDetach(allocator, registration) catch {};
 
     const runtime = if (!scan_only)
-        try runtime_worker.RuntimeWorker.create(allocator, root, agent_id, if (home_claim) |claim| claim.home_path else null, .{
+        try runtime_worker.RuntimeWorker.create(allocator, root, agent_id, if (home_claim) |claim| claim.target_path else null, .{
             .config_path = config_path,
             .provider_name = provider_name,
             .model_name = model_name,
@@ -230,13 +231,20 @@ fn runScanner(
     worker_registration: ?WorkerRegistration,
     runtime: ?*runtime_worker.RuntimeWorker,
 ) !void {
+    const trace = runtime != null;
     while (true) {
         if (worker_registration) |registration| {
+            traceLog(trace, "worker heartbeat: {s}", .{registration.worker_id});
             try sendWorkerHeartbeat(allocator, registration);
         }
-        var pre_report = try scanWorkspace(allocator, workspace_root);
+        traceLog(trace, "scan begin: {s}", .{workspace_root});
+        var pre_report = try scanWorkspace(allocator, workspace_root, trace);
+        traceLog(trace, "scan complete: jobs={d}", .{pre_report.jobs.len});
+        defer if (once) pre_report.deinit(allocator);
         if (!scan_only) {
+            traceLog(trace, "process queued begin", .{});
             const processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs, runtime);
+            traceLog(trace, "process queued complete: processed={d}", .{processed});
             if (processed > 0) {
                 var out = std.fs.File.stdout();
                 const line = try std.fmt.allocPrint(allocator, "processed_jobs: {d}\n", .{processed});
@@ -244,18 +252,26 @@ fn runScanner(
                 try out.writeAll(line);
             }
         }
+
+        if (once) {
+            if (scan_only) {
+                try printScanReport(allocator, &pre_report);
+            }
+            return;
+        }
         pre_report.deinit(allocator);
 
-        var report = try scanWorkspace(allocator, workspace_root);
+        traceLog(trace, "scan refresh begin", .{});
+        var report = try scanWorkspace(allocator, workspace_root, trace);
         defer report.deinit(allocator);
+        traceLog(trace, "scan refresh complete: jobs={d}", .{report.jobs.len});
         try printScanReport(allocator, &report);
 
-        if (once) return;
         std.Thread.sleep(interval_ms * std.time.ns_per_ms);
     }
 }
 
-fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !ScanReport {
+fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, trace: bool) !ScanReport {
     const services_path = try std.fs.path.join(allocator, &.{ workspace_root, "services" });
     defer allocator.free(services_path);
     const services_chat_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "chat" });
@@ -280,7 +296,8 @@ fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !Scan
     defer allocator.free(global_venoms_path);
 
     const jobs_exists = pathExists(services_jobs_path);
-    const jobs = if (jobs_exists) try scanJobs(allocator, services_jobs_path) else try allocator.alloc(JobSummary, 0);
+    traceLog(trace, "scanWorkspace jobs_path={s} exists={s}", .{ services_jobs_path, if (jobs_exists) "true" else "false" });
+    const jobs = if (jobs_exists) try scanJobs(allocator, services_jobs_path, trace) else try allocator.alloc(JobSummary, 0);
     return .{
         .workspace_root = workspace_root,
         .services_exists = pathExists(services_path),
@@ -318,8 +335,14 @@ fn ensureAgentHome(
     defer allocator.free(ensure_path);
     const result_path = try std.fs.path.join(allocator, &.{ root, "result.json" });
     defer allocator.free(result_path);
+    const bind_path = try std.fmt.allocPrint(allocator, "/home/{s}", .{agent_id});
+    defer allocator.free(bind_path);
 
-    const payload = try std.fmt.allocPrint(allocator, "{{\"agent_id\":\"{s}\"}}", .{agent_id});
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"agent_id\":\"{s}\",\"bind_path\":\"{s}\"}}",
+        .{ agent_id, bind_path },
+    );
     defer allocator.free(payload);
     try writeFileReplacing(ensure_path, payload);
 
@@ -328,14 +351,14 @@ fn ensureAgentHome(
     var claim = try parseHomeClaimResult(allocator, root, agent_id, result_raw);
     errdefer claim.deinit(allocator);
 
-    try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, claim.home_path);
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state", .{claim.home_path});
+    try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, claim.target_path);
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state", .{claim.target_path});
     defer allocator.free(state_path);
     try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, state_path);
-    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{claim.home_path});
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{claim.target_path});
     defer allocator.free(cache_path);
     try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, cache_path);
-    const binds_path = try std.fmt.allocPrint(allocator, "{s}/binds", .{claim.home_path});
+    const binds_path = try std.fmt.allocPrint(allocator, "{s}/binds", .{claim.target_path});
     defer allocator.free(binds_path);
     try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, binds_path);
     return claim;
@@ -531,9 +554,37 @@ fn countChildDirectories(path: []const u8) !usize {
     return count;
 }
 
-fn scanJobs(allocator: std.mem.Allocator, jobs_path: []const u8) ![]JobSummary {
+fn scanJobs(allocator: std.mem.Allocator, jobs_path: []const u8, trace: bool) ![]JobSummary {
     var dir = try std.fs.cwd().openDir(jobs_path, .{ .iterate = true });
     defer dir.close();
+    traceLog(trace, "scanJobs openDir ok: {s}", .{jobs_path});
+
+    var candidates = std.ArrayListUnmanaged([]u8){};
+    defer {
+        for (candidates.items) |name| allocator.free(name);
+        candidates.deinit(allocator);
+    }
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
+        const job_path = try std.fs.path.join(allocator, &.{ jobs_path, entry.name });
+        defer allocator.free(job_path);
+        var job_dir = std.fs.cwd().openDir(job_path, .{}) catch continue;
+        job_dir.close();
+        try candidates.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+
+    std.mem.sort([]u8, candidates.items, {}, struct {
+        fn lessThan(_: void, lhs: []u8, rhs: []u8) bool {
+            const lhs_seq = parseJobSequence(lhs);
+            const rhs_seq = parseJobSequence(rhs);
+            if (lhs_seq != null and rhs_seq != null and lhs_seq.? != rhs_seq.?) {
+                return lhs_seq.? > rhs_seq.?;
+            }
+            return std.mem.lessThan(u8, rhs, lhs);
+        }
+    }.lessThan);
 
     var out = std.ArrayListUnmanaged(JobSummary){};
     errdefer {
@@ -541,12 +592,15 @@ fn scanJobs(allocator: std.mem.Allocator, jobs_path: []const u8) ![]JobSummary {
         out.deinit(allocator);
     }
 
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind != .directory) continue;
-        const job_path = try std.fs.path.join(allocator, &.{ jobs_path, entry.name });
+    const scan_count = @min(candidates.items.len, max_recent_jobs_to_scan);
+    traceLog(trace, "scanJobs candidates={d} scan_count={d}", .{ candidates.items.len, scan_count });
+    for (candidates.items[0..scan_count]) |entry_name| {
+        traceLog(trace, "scanJobs entry: {s}", .{entry_name});
+        const job_path = try std.fs.path.join(allocator, &.{ jobs_path, entry_name });
         defer allocator.free(job_path);
-        try out.append(allocator, try scanSingleJob(allocator, entry.name, job_path));
+        traceLog(trace, "scanJobs open candidate: {s}", .{job_path});
+        traceLog(trace, "scanJobs scanSingleJob: {s}", .{entry_name});
+        try out.append(allocator, try scanSingleJob(allocator, entry_name, job_path, trace));
     }
 
     std.mem.sort(JobSummary, out.items, {}, struct {
@@ -558,14 +612,21 @@ fn scanJobs(allocator: std.mem.Allocator, jobs_path: []const u8) ![]JobSummary {
     return out.toOwnedSlice(allocator);
 }
 
-fn scanSingleJob(allocator: std.mem.Allocator, job_id: []const u8, job_path: []const u8) !JobSummary {
+fn parseJobSequence(job_id: []const u8) ?u64 {
+    if (!std.mem.startsWith(u8, job_id, "job-")) return null;
+    return std.fmt.parseInt(u64, job_id["job-".len..], 10) catch null;
+}
+
+fn scanSingleJob(allocator: std.mem.Allocator, job_id: []const u8, job_path: []const u8, trace: bool) !JobSummary {
     const status_path = try std.fs.path.join(allocator, &.{ job_path, "status.json" });
     defer allocator.free(status_path);
     const request_path = try std.fs.path.join(allocator, &.{ job_path, "request.json" });
     defer allocator.free(request_path);
 
+    traceLog(trace, "scanSingleJob read status: {s}", .{status_path});
     const status_raw = try readOptionalFile(allocator, status_path, 16 * 1024);
     defer if (status_raw) |value| allocator.free(value);
+    traceLog(trace, "scanSingleJob read request: {s}", .{request_path});
     const request_raw = try readOptionalFile(allocator, request_path, 64 * 1024);
     defer if (request_raw) |value| allocator.free(value);
     const request_text = try parseJobInputText(allocator, request_raw);
@@ -642,11 +703,15 @@ fn processQueuedJobs(
     jobs: []const JobSummary,
     runtime: ?*runtime_worker.RuntimeWorker,
 ) !usize {
+    const trace = runtime != null;
     var processed: usize = 0;
     for (jobs) |job| {
+        traceLog(trace, "job seen: {s} state={s}", .{ job.job_id, job.state });
         if (!std.mem.eql(u8, job.state, "queued")) continue;
         const input_text = job.input_text orelse continue;
+        traceLog(trace, "job pickup start: {s}", .{job.job_id});
         try processSingleQueuedJob(allocator, workspace_root, job.job_path, job.job_id, input_text, runtime);
+        traceLog(trace, "job pickup complete: {s}", .{job.job_id});
         processed += 1;
     }
     return processed;
@@ -742,6 +807,19 @@ fn processSingleQueuedJob(
         writeFileReplacing(reply_path, reply) catch {};
     }
 
+    if (runtime_execution) |value| {
+        if (value.terminal_error) {
+            const failed_status = try std.fmt.allocPrint(
+                allocator,
+                "{{\"state\":\"failed\",\"correlation_id\":null,\"error\":\"{s}\",\"updated_at_ms\":{d}}}",
+                .{ value.error_code orelse "execution_failed", std.time.milliTimestamp() },
+            );
+            defer allocator.free(failed_status);
+            try writeFileReplacing(status_path, failed_status);
+            return;
+        }
+    }
+
     const done_status = try std.fmt.allocPrint(
         allocator,
         "{{\"state\":\"done\",\"correlation_id\":null,\"error\":null,\"updated_at_ms\":{d}}}",
@@ -752,9 +830,17 @@ fn processSingleQueuedJob(
 }
 
 fn writeFileReplacing(path: []const u8, content: []const u8) !void {
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    var file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.cwd().createFile(path, .{ .truncate = true }),
+        else => return err,
+    };
     defer file.close();
     try file.writeAll(content);
+}
+
+fn traceLog(enabled: bool, comptime fmt: []const u8, args: anytype) void {
+    if (!enabled) return;
+    std.debug.print("[spider-monkey] " ++ fmt ++ "\n", args);
 }
 
 fn printStartupSummary(
