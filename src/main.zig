@@ -4,6 +4,8 @@ const runtime_worker = @import("runtime_worker.zig");
 const default_interval_ms: u64 = 5_000;
 const once_scan_retry_ms: u64 = 500;
 const max_once_scan_attempts: usize = 8;
+const transient_mount_retry_ms: u64 = 250;
+const transient_mount_retry_attempts: usize = 5;
 
 const max_preview_bytes: usize = 96;
 const max_recent_jobs_to_scan: usize = 4;
@@ -327,8 +329,18 @@ fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !Scan
 }
 
 fn ensureWorkspaceRoot(path: []const u8) !void {
-    var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-    defer dir.close();
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| {
+            if (isTransientMountError(err) and attempt + 1 < transient_mount_retry_attempts) {
+                std.Thread.sleep(transient_mount_retry_ms * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        defer dir.close();
+        return;
+    }
 }
 
 fn ensureAgentHome(
@@ -355,7 +367,7 @@ fn ensureAgentHome(
     defer allocator.free(payload);
     try writeFileReplacing(ensure_path, payload);
 
-    const result_raw = try std.fs.cwd().readFileAlloc(allocator, result_path, 64 * 1024);
+    const result_raw = try readFileAllocWithRetry(allocator, result_path, 64 * 1024);
     defer allocator.free(result_raw);
     var claim = try parseHomeClaimResult(allocator, root, agent_id, result_raw);
     errdefer claim.deinit(allocator);
@@ -396,7 +408,7 @@ fn ensureWorkerRegistration(
     defer allocator.free(payload);
     try writeFileReplacing(register_path, payload);
 
-    const result_raw = try std.fs.cwd().readFileAlloc(allocator, result_path, 64 * 1024);
+    const result_raw = try readFileAllocWithRetry(allocator, result_path, 64 * 1024);
     defer allocator.free(result_raw);
     return try parseWorkerRegistrationResult(allocator, root, agent_id, worker_id, result_raw);
 }
@@ -547,8 +559,20 @@ fn ensureRelativeDirectoryForAbsoluteWorkspacePath(
 }
 
 fn pathExists(path: []const u8) bool {
-    std.fs.cwd().access(path, .{}) catch return false;
-    return true;
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        std.fs.cwd().access(path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => {
+                if (isTransientMountError(err) and attempt + 1 < transient_mount_retry_attempts) {
+                    std.Thread.sleep(transient_mount_retry_ms * std.time.ns_per_ms);
+                    continue;
+                }
+                return false;
+            },
+        };
+        return true;
+    }
 }
 
 fn countChildDirectories(path: []const u8) !usize {
@@ -842,12 +866,51 @@ fn processSingleQueuedJob(
 }
 
 fn writeFileReplacing(path: []const u8, content: []const u8) !void {
-    var file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| switch (err) {
-        error.FileNotFound => try std.fs.cwd().createFile(path, .{ .truncate = true }),
-        else => return err,
-    };
-    defer file.close();
-    try file.writeAll(content);
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        var file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| switch (err) {
+            error.FileNotFound => std.fs.cwd().createFile(path, .{ .truncate = true }) catch |create_err| {
+                if (isTransientMountError(create_err) and attempt + 1 < transient_mount_retry_attempts) {
+                    std.Thread.sleep(transient_mount_retry_ms * std.time.ns_per_ms);
+                    continue;
+                }
+                return create_err;
+            },
+            else => {
+                if (isTransientMountError(err) and attempt + 1 < transient_mount_retry_attempts) {
+                    std.Thread.sleep(transient_mount_retry_ms * std.time.ns_per_ms);
+                    continue;
+                }
+                return err;
+            },
+        };
+        defer file.close();
+        file.writeAll(content) catch |err| {
+            if (isTransientMountError(err) and attempt + 1 < transient_mount_retry_attempts) {
+                std.Thread.sleep(transient_mount_retry_ms * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        return;
+    }
+}
+
+fn readFileAllocWithRetry(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        return std.fs.cwd().readFileAlloc(allocator, path, max_bytes) catch |err| {
+            if (isTransientMountError(err) and attempt + 1 < transient_mount_retry_attempts) {
+                std.Thread.sleep(transient_mount_retry_ms * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+    }
+}
+
+fn isTransientMountError(err: anyerror) bool {
+    return err == error.InputOutput or err == error.Unexpected;
 }
 
 fn printStartupSummary(
