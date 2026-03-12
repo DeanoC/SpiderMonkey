@@ -1104,7 +1104,7 @@ fn boolLabel(value: bool) []const u8 {
 
 fn printHelp() !void {
     const help =
-        \\spider-monkey - Spiderweb workspace worker scaffold
+        \\spider-monkey - Spiderweb workspace worker
         \\
         \\Usage:
         \\  spider-monkey run --workspace-root <mounted-path> [--agent-id <id>] [--worker-id <id>] [--config <path>] [--provider <name>] [--model <name>] [--api-key <key>] [--base-url <url>] [--emit-debug] [--once] [--scan-only] [--interval-ms <ms>]
