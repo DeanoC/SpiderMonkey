@@ -2,25 +2,25 @@
 
 Terminal service root:
 
-- `/global/terminal`
+- `/services/terminal` when bound, otherwise the discovered terminal Venom path
 
 Control files:
 
-- `/global/terminal/control/create.json`
-- `/global/terminal/control/resume.json`
-- `/global/terminal/control/close.json`
-- `/global/terminal/control/write.json`
-- `/global/terminal/control/read.json`
-- `/global/terminal/control/resize.json`
-- `/global/terminal/control/exec.json`
-- `/global/terminal/control/invoke.json`
+- `/services/terminal/control/create.json`
+- `/services/terminal/control/resume.json`
+- `/services/terminal/control/close.json`
+- `/services/terminal/control/write.json`
+- `/services/terminal/control/read.json`
+- `/services/terminal/control/resize.json`
+- `/services/terminal/control/exec.json`
+- `/services/terminal/control/invoke.json`
 
 Runtime files:
 
-- `/global/terminal/status.json`
-- `/global/terminal/result.json`
-- `/global/terminal/current.json`
-- `/global/terminal/sessions.json`
+- `/services/terminal/status.json`
+- `/services/terminal/result.json`
+- `/services/terminal/current.json`
+- `/services/terminal/sessions.json`
 
 ## Choose the right pattern
 
@@ -33,33 +33,33 @@ Runtime files:
 
 Write:
 
-- path: `/global/terminal/control/exec.json`
+- path: `/services/terminal/control/exec.json`
 - payload: `{"command":"git status --short"}`
 
 Then read:
 
-- `/global/terminal/status.json`
-- `/global/terminal/result.json`
+- `/services/terminal/status.json`
+- `/services/terminal/result.json`
 
 If you need explicit routing through the generic endpoint:
 
-- path: `/global/terminal/control/invoke.json`
+- path: `/services/terminal/control/invoke.json`
 - payload: `{"op":"exec","arguments":{"command":"git status --short"}}`
 
 ## Interactive session workflow
 
 1. Create session:
-   - path: `/global/terminal/control/create.json`
+   - path: `/services/terminal/control/create.json`
    - payload: `{"session_id":"build","cwd":"."}`
 2. Send input:
-   - path: `/global/terminal/control/write.json`
+   - path: `/services/terminal/control/write.json`
    - payload: `{"session_id":"build","input":"npm test","append_newline":true}`
 3. Read output:
-   - path: `/global/terminal/control/read.json`
+   - path: `/services/terminal/control/read.json`
    - payload: `{"session_id":"build","timeout_ms":1000,"max_bytes":65536}`
 4. Repeat write/read until complete.
 5. Close:
-   - path: `/global/terminal/control/close.json`
+   - path: `/services/terminal/control/close.json`
    - payload: `{"session_id":"build"}`
 
 ## Payload notes

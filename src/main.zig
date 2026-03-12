@@ -2,8 +2,11 @@ const std = @import("std");
 const runtime_worker = @import("runtime_worker.zig");
 
 const default_interval_ms: u64 = 5_000;
+const once_scan_retry_ms: u64 = 500;
+const max_once_scan_attempts: usize = 8;
 
 const max_preview_bytes: usize = 96;
+const max_recent_jobs_to_scan: usize = 4;
 
 const default_agent_id: []const u8 = "spider-monkey";
 
@@ -63,9 +66,14 @@ const ScanReport = struct {
     services_exists: bool,
     services_chat_exists: bool,
     services_jobs_exists: bool,
+    services_venom_packages_exists: bool,
     global_chat_exists: bool,
     global_jobs_exists: bool,
     meta_exists: bool,
+    meta_workspace_services_exists: bool,
+    meta_venom_packages_exists: bool,
+    local_venoms_exists: bool,
+    global_venoms_exists: bool,
     jobs_path: ?[]u8,
     job_dir_count: usize,
     jobs: []JobSummary = &.{},
@@ -196,11 +204,11 @@ pub fn main() !void {
     var home_claim = try ensureAgentHome(allocator, root, agent_id);
     defer if (home_claim) |*claim| claim.deinit(allocator);
     var worker_registration = try ensureWorkerRegistration(allocator, root, agent_id, effective_worker_id);
-    defer if (worker_registration) |registration| sendWorkerDetach(allocator, registration) catch {};
     defer if (worker_registration) |*registration| registration.deinit(allocator);
+    defer if (worker_registration) |registration| sendWorkerDetach(allocator, registration) catch {};
 
     const runtime = if (!scan_only)
-        try runtime_worker.RuntimeWorker.create(allocator, root, agent_id, if (home_claim) |claim| claim.home_path else null, .{
+        try runtime_worker.RuntimeWorker.create(allocator, root, agent_id, if (home_claim) |claim| claim.target_path else null, .{
             .config_path = config_path,
             .provider_name = provider_name,
             .model_name = model_name,
@@ -225,13 +233,16 @@ fn runScanner(
     worker_registration: ?WorkerRegistration,
     runtime: ?*runtime_worker.RuntimeWorker,
 ) !void {
+    var once_attempt: usize = 0;
     while (true) {
         if (worker_registration) |registration| {
             try sendWorkerHeartbeat(allocator, registration);
         }
         var pre_report = try scanWorkspace(allocator, workspace_root);
+        defer if (once) pre_report.deinit(allocator);
+        var processed: usize = 0;
         if (!scan_only) {
-            const processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs, runtime);
+            processed = try processQueuedJobs(allocator, workspace_root, pre_report.jobs, runtime);
             if (processed > 0) {
                 var out = std.fs.File.stdout();
                 const line = try std.fmt.allocPrint(allocator, "processed_jobs: {d}\n", .{processed});
@@ -239,15 +250,35 @@ fn runScanner(
                 try out.writeAll(line);
             }
         }
+
+        if (once) {
+            once_attempt += 1;
+            if (!scan_only and processed == 0 and shouldRetryOnceScan(&pre_report) and once_attempt < max_once_scan_attempts) {
+                std.Thread.sleep(once_scan_retry_ms * std.time.ns_per_ms);
+                continue;
+            }
+            if (scan_only) {
+                try printScanReport(allocator, &pre_report);
+            }
+            return;
+        }
         pre_report.deinit(allocator);
 
         var report = try scanWorkspace(allocator, workspace_root);
         defer report.deinit(allocator);
         try printScanReport(allocator, &report);
 
-        if (once) return;
         std.Thread.sleep(interval_ms * std.time.ns_per_ms);
     }
+}
+
+fn shouldRetryOnceScan(report: *const ScanReport) bool {
+    if (!report.services_jobs_exists) return false;
+    if (report.job_dir_count == 0) return true;
+    for (report.jobs) |job| {
+        if (std.mem.eql(u8, job.state, "queued")) return true;
+    }
+    return false;
 }
 
 fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !ScanReport {
@@ -257,12 +288,22 @@ fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !Scan
     defer allocator.free(services_chat_path);
     const services_jobs_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "jobs" });
     defer allocator.free(services_jobs_path);
+    const services_venom_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "venom_packages" });
+    defer allocator.free(services_venom_packages_path);
     const global_chat_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "chat" });
     defer allocator.free(global_chat_path);
     const global_jobs_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "jobs" });
     defer allocator.free(global_jobs_path);
     const meta_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta" });
     defer allocator.free(meta_path);
+    const meta_workspace_services_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta", "workspace_services.json" });
+    defer allocator.free(meta_workspace_services_path);
+    const meta_venom_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta", "venom_packages.json" });
+    defer allocator.free(meta_venom_packages_path);
+    const local_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, "nodes", "local", "venoms", "VENOMS.json" });
+    defer allocator.free(local_venoms_path);
+    const global_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "venoms", "VENOMS.json" });
+    defer allocator.free(global_venoms_path);
 
     const jobs_exists = pathExists(services_jobs_path);
     const jobs = if (jobs_exists) try scanJobs(allocator, services_jobs_path) else try allocator.alloc(JobSummary, 0);
@@ -271,9 +312,14 @@ fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !Scan
         .services_exists = pathExists(services_path),
         .services_chat_exists = pathExists(services_chat_path),
         .services_jobs_exists = jobs_exists,
+        .services_venom_packages_exists = pathExists(services_venom_packages_path),
         .global_chat_exists = pathExists(global_chat_path),
         .global_jobs_exists = pathExists(global_jobs_path),
         .meta_exists = pathExists(meta_path),
+        .meta_workspace_services_exists = pathExists(meta_workspace_services_path),
+        .meta_venom_packages_exists = pathExists(meta_venom_packages_path),
+        .local_venoms_exists = pathExists(local_venoms_path),
+        .global_venoms_exists = pathExists(global_venoms_path),
         .jobs_path = if (jobs_exists) try allocator.dupe(u8, services_jobs_path) else null,
         .job_dir_count = jobs.len,
         .jobs = jobs,
@@ -298,8 +344,14 @@ fn ensureAgentHome(
     defer allocator.free(ensure_path);
     const result_path = try std.fs.path.join(allocator, &.{ root, "result.json" });
     defer allocator.free(result_path);
+    const bind_path = try std.fmt.allocPrint(allocator, "/home/{s}", .{agent_id});
+    defer allocator.free(bind_path);
 
-    const payload = try std.fmt.allocPrint(allocator, "{{\"agent_id\":\"{s}\"}}", .{agent_id});
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"agent_id\":\"{s}\",\"bind_path\":\"{s}\"}}",
+        .{ agent_id, bind_path },
+    );
     defer allocator.free(payload);
     try writeFileReplacing(ensure_path, payload);
 
@@ -308,14 +360,14 @@ fn ensureAgentHome(
     var claim = try parseHomeClaimResult(allocator, root, agent_id, result_raw);
     errdefer claim.deinit(allocator);
 
-    try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, claim.home_path);
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state", .{claim.home_path});
+    try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, claim.target_path);
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state", .{claim.target_path});
     defer allocator.free(state_path);
     try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, state_path);
-    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{claim.home_path});
+    const cache_path = try std.fmt.allocPrint(allocator, "{s}/cache", .{claim.target_path});
     defer allocator.free(cache_path);
     try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, cache_path);
-    const binds_path = try std.fmt.allocPrint(allocator, "{s}/binds", .{claim.home_path});
+    const binds_path = try std.fmt.allocPrint(allocator, "{s}/binds", .{claim.target_path});
     defer allocator.free(binds_path);
     try ensureRelativeDirectoryForAbsoluteWorkspacePath(allocator, workspace_root, binds_path);
     return claim;
@@ -338,7 +390,7 @@ fn ensureWorkerRegistration(
 
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"venoms\":[\"memory\",\"sub_brains\"]}}",
+        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\"}}",
         .{ agent_id, worker_id },
     );
     defer allocator.free(payload);
@@ -354,7 +406,7 @@ fn sendWorkerHeartbeat(allocator: std.mem.Allocator, registration: WorkerRegistr
     defer allocator.free(heartbeat_path);
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"venoms\":[\"memory\",\"sub_brains\"],\"ttl_ms\":30000}}",
+        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"ttl_ms\":30000}}",
         .{ registration.agent_id, registration.worker_id },
     );
     defer allocator.free(payload);
@@ -515,18 +567,44 @@ fn scanJobs(allocator: std.mem.Allocator, jobs_path: []const u8) ![]JobSummary {
     var dir = try std.fs.cwd().openDir(jobs_path, .{ .iterate = true });
     defer dir.close();
 
+    var candidates = std.ArrayListUnmanaged([]u8){};
+    defer {
+        for (candidates.items) |name| allocator.free(name);
+        candidates.deinit(allocator);
+    }
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
+        const job_path = try std.fs.path.join(allocator, &.{ jobs_path, entry.name });
+        defer allocator.free(job_path);
+        var job_dir = std.fs.cwd().openDir(job_path, .{}) catch continue;
+        job_dir.close();
+        try candidates.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+
+    std.mem.sort([]u8, candidates.items, {}, struct {
+        fn lessThan(_: void, lhs: []u8, rhs: []u8) bool {
+            const lhs_seq = parseJobSequence(lhs);
+            const rhs_seq = parseJobSequence(rhs);
+            if (lhs_seq != null and rhs_seq != null and lhs_seq.? != rhs_seq.?) {
+                return lhs_seq.? > rhs_seq.?;
+            }
+            return std.mem.lessThan(u8, rhs, lhs);
+        }
+    }.lessThan);
+
     var out = std.ArrayListUnmanaged(JobSummary){};
     errdefer {
         for (out.items) |*job| job.deinit(allocator);
         out.deinit(allocator);
     }
 
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind != .directory) continue;
-        const job_path = try std.fs.path.join(allocator, &.{ jobs_path, entry.name });
+    const scan_count = @min(candidates.items.len, max_recent_jobs_to_scan);
+    for (candidates.items[0..scan_count]) |entry_name| {
+        const job_path = try std.fs.path.join(allocator, &.{ jobs_path, entry_name });
         defer allocator.free(job_path);
-        try out.append(allocator, try scanSingleJob(allocator, entry.name, job_path));
+        try out.append(allocator, try scanSingleJob(allocator, entry_name, job_path));
     }
 
     std.mem.sort(JobSummary, out.items, {}, struct {
@@ -536,6 +614,11 @@ fn scanJobs(allocator: std.mem.Allocator, jobs_path: []const u8) ![]JobSummary {
     }.lessThan);
 
     return out.toOwnedSlice(allocator);
+}
+
+fn parseJobSequence(job_id: []const u8) ?u64 {
+    if (!std.mem.startsWith(u8, job_id, "job-")) return null;
+    return std.fmt.parseInt(u64, job_id["job-".len..], 10) catch null;
 }
 
 fn scanSingleJob(allocator: std.mem.Allocator, job_id: []const u8, job_path: []const u8) !JobSummary {
@@ -566,10 +649,24 @@ fn scanSingleJob(allocator: std.mem.Allocator, job_id: []const u8, job_path: []c
 }
 
 fn readOptionalFile(allocator: std.mem.Allocator, path: []const u8, max_bytes: usize) !?[]u8 {
-    const content = std.fs.cwd().readFileAlloc(allocator, path, max_bytes) catch |err| switch (err) {
+    var file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
+    defer file.close();
+
+    var out = std.ArrayListUnmanaged(u8){};
+    errdefer out.deinit(allocator);
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const remaining = max_bytes - out.items.len;
+        if (remaining == 0) return error.FileTooBig;
+        const read_len = @min(buffer.len, remaining);
+        const amount = try file.read(buffer[0..read_len]);
+        if (amount == 0) break;
+        try out.appendSlice(allocator, buffer[0..amount]);
+    }
+    const content = try out.toOwnedSlice(allocator);
     return @as(?[]u8, content);
 }
 
@@ -722,6 +819,19 @@ fn processSingleQueuedJob(
         writeFileReplacing(reply_path, reply) catch {};
     }
 
+    if (runtime_execution) |value| {
+        if (value.terminal_error) {
+            const failed_status = try std.fmt.allocPrint(
+                allocator,
+                "{{\"state\":\"failed\",\"correlation_id\":null,\"error\":\"{s}\",\"updated_at_ms\":{d}}}",
+                .{ value.error_code orelse "execution_failed", std.time.milliTimestamp() },
+            );
+            defer allocator.free(failed_status);
+            try writeFileReplacing(status_path, failed_status);
+            return;
+        }
+    }
+
     const done_status = try std.fmt.allocPrint(
         allocator,
         "{{\"state\":\"done\",\"correlation_id\":null,\"error\":null,\"updated_at_ms\":{d}}}",
@@ -732,7 +842,10 @@ fn processSingleQueuedJob(
 }
 
 fn writeFileReplacing(path: []const u8, content: []const u8) !void {
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    var file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.cwd().createFile(path, .{ .truncate = true }),
+        else => return err,
+    };
     defer file.close();
     try file.writeAll(content);
 }
@@ -860,6 +973,10 @@ fn printScanReport(allocator: std.mem.Allocator, report: *const ScanReport) !voi
     defer allocator.free(services_jobs_line);
     try out.writeAll(services_jobs_line);
 
+    const services_venom_packages_line = try std.fmt.allocPrint(allocator, "  services/venom_packages: {s}\n", .{boolLabel(report.services_venom_packages_exists)});
+    defer allocator.free(services_venom_packages_line);
+    try out.writeAll(services_venom_packages_line);
+
     const global_chat_line = try std.fmt.allocPrint(allocator, "  global/chat: {s}\n", .{boolLabel(report.global_chat_exists)});
     defer allocator.free(global_chat_line);
     try out.writeAll(global_chat_line);
@@ -871,6 +988,22 @@ fn printScanReport(allocator: std.mem.Allocator, report: *const ScanReport) !voi
     const meta_line = try std.fmt.allocPrint(allocator, "  meta: {s}\n", .{boolLabel(report.meta_exists)});
     defer allocator.free(meta_line);
     try out.writeAll(meta_line);
+
+    const meta_workspace_services_line = try std.fmt.allocPrint(allocator, "  meta/workspace_services.json: {s}\n", .{boolLabel(report.meta_workspace_services_exists)});
+    defer allocator.free(meta_workspace_services_line);
+    try out.writeAll(meta_workspace_services_line);
+
+    const meta_venom_packages_line = try std.fmt.allocPrint(allocator, "  meta/venom_packages.json: {s}\n", .{boolLabel(report.meta_venom_packages_exists)});
+    defer allocator.free(meta_venom_packages_line);
+    try out.writeAll(meta_venom_packages_line);
+
+    const local_venoms_line = try std.fmt.allocPrint(allocator, "  nodes/local/venoms/VENOMS.json: {s}\n", .{boolLabel(report.local_venoms_exists)});
+    defer allocator.free(local_venoms_line);
+    try out.writeAll(local_venoms_line);
+
+    const global_venoms_line = try std.fmt.allocPrint(allocator, "  global/venoms/VENOMS.json: {s}\n", .{boolLabel(report.global_venoms_exists)});
+    defer allocator.free(global_venoms_line);
+    try out.writeAll(global_venoms_line);
 
     if (report.jobs_path) |jobs_path| {
         const jobs_path_line = try std.fmt.allocPrint(allocator, "  jobs_path: {s}\n", .{jobs_path});
@@ -989,6 +1122,24 @@ test "processQueuedJobs completes queued workspace job" {
     const result_after = try std.fs.cwd().readFileAlloc(allocator, result_path, 4 * 1024);
     defer allocator.free(result_after);
     try std.testing.expectEqualStrings("Spider Monkey received: hello from test", result_after);
+}
+
+test "writeFileReplacing truncates existing content" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const root = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/status.json", .{root});
+    defer allocator.free(file_path);
+
+    try writeFileReplacing(file_path, "{\"state\":\"running\",\"error\":null}");
+    try writeFileReplacing(file_path, "{\"state\":\"done\"}");
+
+    const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024);
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("{\"state\":\"done\"}", content);
 }
 
 test "ensureAgentHome claims and bootstraps agent home directories" {
