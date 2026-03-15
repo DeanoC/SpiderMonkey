@@ -2460,15 +2460,145 @@ pub const RuntimeServer = struct {
 
         const escaped_reasoning = try protocol.jsonEscape(self.allocator, options.reasoning orelse "");
         defer self.allocator.free(escaped_reasoning);
+        const escaped_reasoning_summary = try protocol.jsonEscape(self.allocator, options.reasoning_summary orelse "");
+        defer self.allocator.free(escaped_reasoning_summary);
+        const escaped_session_id = try protocol.jsonEscape(self.allocator, options.session_id orelse "");
+        defer self.allocator.free(escaped_session_id);
+        const escaped_text_verbosity = try protocol.jsonEscape(self.allocator, options.text_verbosity orelse "");
+        defer self.allocator.free(escaped_text_verbosity);
+        const escaped_transport = try protocol.jsonEscape(self.allocator, @tagName(options.transport));
+        defer self.allocator.free(escaped_transport);
+        const escaped_cache_retention = try protocol.jsonEscape(self.allocator, options.cache_retention orelse "");
+        defer self.allocator.free(escaped_cache_retention);
         const escaped_api_key = try protocol.jsonEscape(self.allocator, options.api_key orelse "");
         defer self.allocator.free(escaped_api_key);
         try out.appendSlice(self.allocator, "],\"options\":{\"reasoning\":\"");
         try out.appendSlice(self.allocator, escaped_reasoning);
-        try out.appendSlice(self.allocator, "\",\"api_key\":\"");
+        try out.appendSlice(self.allocator, "\",\"reasoning_summary\":\"");
+        try out.appendSlice(self.allocator, escaped_reasoning_summary);
+        try out.appendSlice(self.allocator, "\",\"session_id\":\"");
+        try out.appendSlice(self.allocator, escaped_session_id);
+        try out.appendSlice(self.allocator, "\",\"text_verbosity\":\"");
+        try out.appendSlice(self.allocator, escaped_text_verbosity);
+        try out.appendSlice(self.allocator, "\",\"transport\":\"");
+        try out.appendSlice(self.allocator, escaped_transport);
+        try out.appendSlice(self.allocator, "\",\"cache_retention\":\"");
+        try out.appendSlice(self.allocator, escaped_cache_retention);
+        try out.appendSlice(self.allocator, "\",\"max_retry_delay_ms\":");
+        if (options.max_retry_delay_ms) |delay_ms| {
+            try out.writer(self.allocator).print("{d}", .{delay_ms});
+        } else {
+            try out.appendSlice(self.allocator, "null");
+        }
+        try out.appendSlice(self.allocator, ",\"headers\":[");
+        if (options.headers) |headers| {
+            for (headers, 0..) |header, idx| {
+                if (idx > 0) try out.append(self.allocator, ',');
+                const escaped_name = try protocol.jsonEscape(self.allocator, header.name);
+                defer self.allocator.free(escaped_name);
+                const escaped_value = try protocol.jsonEscape(self.allocator, header.value);
+                defer self.allocator.free(escaped_value);
+                try out.appendSlice(self.allocator, "{\"name\":\"");
+                try out.appendSlice(self.allocator, escaped_name);
+                try out.appendSlice(self.allocator, "\",\"value\":\"");
+                try out.appendSlice(self.allocator, escaped_value);
+                try out.appendSlice(self.allocator, "\"}");
+            }
+        }
+        try out.appendSlice(self.allocator, "],\"metadata\":{");
+        if (options.metadata) |metadata| {
+            for (metadata, 0..) |entry, idx| {
+                if (idx > 0) try out.append(self.allocator, ',');
+                const escaped_key = try protocol.jsonEscape(self.allocator, entry.key);
+                defer self.allocator.free(escaped_key);
+                const escaped_value = try protocol.jsonEscape(self.allocator, entry.value);
+                defer self.allocator.free(escaped_value);
+                try out.appendSlice(self.allocator, "\"");
+                try out.appendSlice(self.allocator, escaped_key);
+                try out.appendSlice(self.allocator, "\":\"");
+                try out.appendSlice(self.allocator, escaped_value);
+                try out.appendSlice(self.allocator, "\"");
+            }
+        }
+        try out.appendSlice(self.allocator, "},\"thinking_budget\":");
+        if (options.thinking_budget) |budget| {
+            try out.appendSlice(self.allocator, "{\"tokens\":");
+            if (budget.tokens) |tokens| {
+                try out.writer(self.allocator).print("{d}", .{tokens});
+            } else {
+                try out.appendSlice(self.allocator, "null");
+            }
+            try out.appendSlice(self.allocator, ",\"level\":");
+            if (budget.level) |level| {
+                const escaped_level = try protocol.jsonEscape(self.allocator, @tagName(level));
+                defer self.allocator.free(escaped_level);
+                try out.appendSlice(self.allocator, "\"");
+                try out.appendSlice(self.allocator, escaped_level);
+                try out.appendSlice(self.allocator, "\"");
+            } else {
+                try out.appendSlice(self.allocator, "null");
+            }
+            try out.appendSlice(self.allocator, "}");
+        } else {
+            try out.appendSlice(self.allocator, "null");
+        }
+        try out.appendSlice(self.allocator, ",\"payload_hook\":");
+        try out.writer(self.allocator).print("{}", .{options.on_payload != null});
+        try out.appendSlice(self.allocator, ",\"api_key\":\"");
         try out.appendSlice(self.allocator, escaped_api_key);
         try out.appendSlice(self.allocator, "\"}}");
 
         return out.toOwnedSlice(self.allocator);
+    }
+
+    fn buildProviderPayloadDebugPayload(
+        self: *RuntimeServer,
+        payload: ziggy_piai.types.ProviderPayload,
+    ) ![]u8 {
+        return switch (payload) {
+            .text_delta => |delta| blk: {
+                const escaped = try protocol.jsonEscape(self.allocator, delta.delta);
+                defer self.allocator.free(escaped);
+                break :blk std.fmt.allocPrint(
+                    self.allocator,
+                    "{{\"type\":\"text_delta\",\"content_index\":{d},\"delta\":\"{s}\"}}",
+                    .{ delta.content_index, escaped },
+                );
+            },
+            .thinking_delta => |delta| blk: {
+                const escaped = try protocol.jsonEscape(self.allocator, delta.delta);
+                defer self.allocator.free(escaped);
+                break :blk std.fmt.allocPrint(
+                    self.allocator,
+                    "{{\"type\":\"thinking_delta\",\"content_index\":{d},\"delta\":\"{s}\"}}",
+                    .{ delta.content_index, escaped },
+                );
+            },
+            .tool_call_delta => |delta| blk: {
+                const normalized = try normalizeJsonValueForDebug(self.allocator, delta.delta);
+                defer self.allocator.free(normalized);
+                break :blk std.fmt.allocPrint(
+                    self.allocator,
+                    "{{\"type\":\"tool_call_delta\",\"content_index\":{d},\"delta\":{s}}}",
+                    .{ delta.content_index, normalized },
+                );
+            },
+            .usage => |usage| std.fmt.allocPrint(
+                self.allocator,
+                "{{\"type\":\"usage\",\"input\":{d},\"output\":{d},\"cache_read\":{d},\"cache_write\":{d},\"total_tokens\":{d}}}",
+                .{ usage.input, usage.output, usage.cache_read, usage.cache_write, usage.total_tokens },
+            ),
+            .raw_json => |raw_json| blk: {
+                const normalized = try normalizeJsonValueForDebug(self.allocator, raw_json);
+                defer self.allocator.free(normalized);
+                break :blk std.fmt.allocPrint(
+                    self.allocator,
+                    "{{\"type\":\"raw_json\",\"payload\":{s}}}",
+                    .{normalized},
+                );
+            },
+            .done => self.allocator.dupe(u8, "{\"type\":\"done\"}"),
+        };
     }
 
     fn buildProviderResponseDebugPayload(
@@ -3024,19 +3154,42 @@ pub const RuntimeServer = struct {
                 const api_key = try self.resolveApiKey(provider_runtime, selected_model.provider);
                 defer self.allocator.free(api_key);
 
-                self.logProviderRequestDebug(brain_name, selected_model, context, .{
+                const PayloadDebugContext = struct {
+                    server: *RuntimeServer,
+                    frames: *std.ArrayListUnmanaged([]u8),
+                    request_id: []const u8,
+
+                    fn handle(raw_ctx: ?*anyopaque, payload: ziggy_piai.types.ProviderPayload) anyerror!void {
+                        const ctx_ptr = raw_ctx orelse return;
+                        const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
+                        const payload_json = try ctx.server.buildProviderPayloadDebugPayload(payload);
+                        defer ctx.server.allocator.free(payload_json);
+                        try ctx.server.appendDebugFrame(ctx.frames, ctx.request_id, "provider.payload", payload_json);
+                    }
+                };
+
+                var provider_options: ziggy_piai.types.StreamOptions = .{
                     .api_key = api_key,
                     .reasoning = think_level,
-                });
+                };
+                var payload_debug_ctx: PayloadDebugContext = undefined;
+                if (job.emit_debug) {
+                    payload_debug_ctx = .{
+                        .server = self,
+                        .frames = &debug_frames,
+                        .request_id = job.request_id,
+                    };
+                    provider_options.on_payload = PayloadDebugContext.handle;
+                    provider_options.on_payload_ctx = &payload_debug_ctx;
+                }
+
+                self.logProviderRequestDebug(brain_name, selected_model, context, provider_options);
                 if (job.emit_debug) {
                     const request_payload_json = try self.buildProviderRequestDebugPayload(
                         brain_name,
                         selected_model,
                         context,
-                        .{
-                            .api_key = api_key,
-                            .reasoning = think_level,
-                        },
+                        provider_options,
                         round,
                     );
                     defer self.allocator.free(request_payload_json);
@@ -3054,10 +3207,7 @@ pub const RuntimeServer = struct {
                     &provider_runtime.api_registry,
                     selected_model,
                     context,
-                    .{
-                        .api_key = api_key,
-                        .reasoning = think_level,
-                    },
+                    provider_options,
                     &events,
                 ) catch |stream_err| {
                     const stream_error_name = @errorName(stream_err);
@@ -5137,12 +5287,14 @@ fn mockProviderStreamByModel(
     _: *ziggy_piai.api_registry.ApiRegistry,
     model: ziggy_piai.types.Model,
     _: ziggy_piai.types.Context,
-    _: ziggy_piai.types.StreamOptions,
+    options: ziggy_piai.types.StreamOptions,
     events: *std.array_list.Managed(ziggy_piai.types.AssistantMessageEvent),
 ) anyerror!void {
     try std.testing.expect(std.mem.eql(u8, model.provider, "openai"));
     const output = try buildMessageOnlyOutput(allocator, "mock provider response");
-    try events.append(.{ .done = .{
+    try ziggy_piai.payload_hooks.dispatchRawJson(options, "{\"mock\":\"provider\"}");
+    try ziggy_piai.payload_hooks.appendTextDelta(allocator, events, options, 0, "mock provider response");
+    const msg: ziggy_piai.types.AssistantMessage = .{
         .text = output,
         .thinking = try allocator.dupe(u8, ""),
         .tool_calls = &.{},
@@ -5152,7 +5304,8 @@ fn mockProviderStreamByModel(
         .usage = .{},
         .stop_reason = .stop,
         .error_message = null,
-    } });
+    };
+    try ziggy_piai.payload_hooks.appendDone(events, options, msg);
 }
 
 fn mockProviderStreamAssertsFreshActiveSnapshot(
@@ -8115,12 +8268,16 @@ test "runtime_server: provider-backed session.send emits debug.event frames when
     defer deinitResponseFrames(allocator, with_debug);
 
     var saw_provider_request = false;
+    var saw_provider_payload = false;
     var saw_provider_response = false;
     var saw_session_receive = false;
     for (with_debug) |payload| {
         if (std.mem.indexOf(u8, payload, "\"category\":\"provider.request\"") != null) {
             saw_provider_request = true;
             try std.testing.expect(std.mem.indexOf(u8, payload, "\"api_key\":\"[redacted]\"") != null);
+        }
+        if (std.mem.indexOf(u8, payload, "\"category\":\"provider.payload\"") != null) {
+            saw_provider_payload = true;
         }
         if (std.mem.indexOf(u8, payload, "\"category\":\"provider.response\"") != null) {
             saw_provider_response = true;
@@ -8131,6 +8288,7 @@ test "runtime_server: provider-backed session.send emits debug.event frames when
     }
 
     try std.testing.expect(saw_provider_request);
+    try std.testing.expect(saw_provider_payload);
     try std.testing.expect(saw_provider_response);
     try std.testing.expect(saw_session_receive);
 }
