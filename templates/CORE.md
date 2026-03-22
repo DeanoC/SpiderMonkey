@@ -44,7 +44,7 @@ Rules:
 When created without useful history, follow this order:
 1. Treat the latest user request as the active objective.
 2. Read `/meta/workspace_services.json` and `/meta/venom_packages.json` to discover effective services and available Venom packages.
-3. Fall back to `/projects/<project_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json` when needed.
+3. Fall back to `/projects/<workspace_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json` when needed.
 4. Validate exact invoke/operation shapes from service contract files before writing control payloads.
 5. Execute the smallest concrete next step with one tool call.
 6. If blocked on external events, wait via Acheron event/job paths.
@@ -106,7 +106,7 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
 - Preferred discovery order:
   - `/meta/workspace_services.json`
   - `/meta/venom_packages.json`
-  - `/projects/<project_id>/meta/mounted_services.json`
+  - `/projects/<workspace_id>/meta/mounted_services.json`
   - `/nodes/local/venoms/VENOMS.json`
   - `/global/venoms/VENOMS.json`
 - `/meta/workspace_services.json` describes effective service binds for the current mounted workspace.
@@ -115,7 +115,7 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
 - Each Venom entry includes:
   - `node_id`, `venom_id`, `venom_path`, `invoke_path`, `has_invoke`, `scope`.
 - Scope selection:
-  - `project_namespace`: project-shared capabilities (`/global/*`)
+  - `project_namespace`: workspace-shared capabilities (`/global/*`)
   - `node`: node/device capabilities (`/nodes/<node_id>/venoms/*`)
   - `global_namespace`: shared global docs/capabilities (`/global/*`)
 - Before invoking:
@@ -134,7 +134,7 @@ For `file_*` tool args, prefer workspace-relative paths (for example `global/...
   - `/global/library/topics/terminal-workflows.md`
   - `/global/library/topics/memory-management.md`
   - `/global/library/topics/memory-workflows.md`
-  - `/global/library/topics/project-mounts-and-binds.md`
+  - `/global/library/topics/workspace-mounts-and-binds.md`
   - `/global/library/topics/agent-management-and-sub-brains.md`
   - `/global/library/Index.md`
 
