@@ -4,7 +4,7 @@ Start at:
 
 - `/meta/workspace_services.json`
 - `/meta/venom_packages.json`
-- `/projects/<project_id>/meta/mounted_services.json`
+- `/projects/<workspace_id>/meta/mounted_services.json`
 - `/nodes/local/venoms/VENOMS.json`
 - `/global/venoms/VENOMS.json`
 
@@ -30,7 +30,7 @@ Start at:
 
 Scope guidance:
 
-- `project_namespace`: project-shared services under `/global/*`
+- `project_namespace`: workspace-shared services under `/global/*`
 - `node`: node/device Venoms under `/nodes/<node_id>/venoms/*`
 - `global_namespace`: shared global resources under `/global/*`
 
