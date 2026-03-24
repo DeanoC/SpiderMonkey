@@ -33,10 +33,10 @@ test "resolveRequestedPath maps canonical workspace paths into the mount root" {
     const root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(root);
 
-    const resolved = try resolveRequestedPath(allocator, root, "/services/chat/control/reply");
+    const resolved = try resolveRequestedPath(allocator, root, "/.spiderweb/venoms/terminal/control/invoke.json");
     defer allocator.free(resolved);
 
-    const expected = try std.fs.path.join(allocator, &.{ root, "services", "chat", "control", "reply" });
+    const expected = try std.fs.path.join(allocator, &.{ root, ".spiderweb", "venoms", "terminal", "control", "invoke.json" });
     defer allocator.free(expected);
     try std.testing.expectEqualStrings(expected, resolved);
 }

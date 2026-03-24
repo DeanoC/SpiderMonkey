@@ -65,17 +65,17 @@ const JobSummary = struct {
 
 const ScanReport = struct {
     workspace_root: []const u8,
-    services_exists: bool,
-    services_chat_exists: bool,
-    services_jobs_exists: bool,
-    services_venom_packages_exists: bool,
-    global_chat_exists: bool,
-    global_jobs_exists: bool,
-    meta_exists: bool,
-    meta_workspace_services_exists: bool,
-    meta_venom_packages_exists: bool,
-    local_venoms_exists: bool,
-    global_venoms_exists: bool,
+    control_root_exists: bool,
+    control_packages_exists: bool,
+    control_runtimes_exists: bool,
+    catalog_root_exists: bool,
+    catalog_packages_exists: bool,
+    catalog_bindings_exists: bool,
+    public_venoms_exists: bool,
+    legacy_services_chat_exists: bool,
+    legacy_services_jobs_exists: bool,
+    legacy_global_chat_exists: bool,
+    legacy_global_jobs_exists: bool,
     jobs_path: ?[]u8,
     job_dir_count: usize,
     jobs: []JobSummary = &.{},
@@ -275,7 +275,7 @@ fn runScanner(
 }
 
 fn shouldRetryOnceScan(report: *const ScanReport) bool {
-    if (!report.services_jobs_exists) return false;
+    if (!report.legacy_services_jobs_exists) return false;
     if (report.job_dir_count == 0) return true;
     for (report.jobs) |job| {
         if (std.mem.eql(u8, job.state, "queued")) return true;
@@ -284,44 +284,44 @@ fn shouldRetryOnceScan(report: *const ScanReport) bool {
 }
 
 fn scanWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !ScanReport {
-    const services_path = try std.fs.path.join(allocator, &.{ workspace_root, "services" });
-    defer allocator.free(services_path);
     const services_chat_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "chat" });
     defer allocator.free(services_chat_path);
     const services_jobs_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "jobs" });
     defer allocator.free(services_jobs_path);
-    const services_venom_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, "services", "venom_packages" });
-    defer allocator.free(services_venom_packages_path);
     const global_chat_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "chat" });
     defer allocator.free(global_chat_path);
     const global_jobs_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "jobs" });
     defer allocator.free(global_jobs_path);
-    const meta_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta" });
-    defer allocator.free(meta_path);
-    const meta_workspace_services_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta", "workspace_services.json" });
-    defer allocator.free(meta_workspace_services_path);
-    const meta_venom_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, "meta", "venom_packages.json" });
-    defer allocator.free(meta_venom_packages_path);
-    const local_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, "nodes", "local", "venoms", "VENOMS.json" });
-    defer allocator.free(local_venoms_path);
-    const global_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, "global", "venoms", "VENOMS.json" });
-    defer allocator.free(global_venoms_path);
+    const control_root_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "control" });
+    defer allocator.free(control_root_path);
+    const control_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "control", "packages" });
+    defer allocator.free(control_packages_path);
+    const control_runtimes_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "control", "runtimes" });
+    defer allocator.free(control_runtimes_path);
+    const catalog_root_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "catalog" });
+    defer allocator.free(catalog_root_path);
+    const catalog_packages_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "catalog", "packages.json" });
+    defer allocator.free(catalog_packages_path);
+    const catalog_bindings_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "catalog", "bindings.json" });
+    defer allocator.free(catalog_bindings_path);
+    const public_venoms_path = try std.fs.path.join(allocator, &.{ workspace_root, ".spiderweb", "venoms", "VENOMS.json" });
+    defer allocator.free(public_venoms_path);
 
     const jobs_exists = pathExists(services_jobs_path);
     const jobs = if (jobs_exists) try scanJobs(allocator, services_jobs_path) else try allocator.alloc(JobSummary, 0);
     return .{
         .workspace_root = workspace_root,
-        .services_exists = pathExists(services_path),
-        .services_chat_exists = pathExists(services_chat_path),
-        .services_jobs_exists = jobs_exists,
-        .services_venom_packages_exists = pathExists(services_venom_packages_path),
-        .global_chat_exists = pathExists(global_chat_path),
-        .global_jobs_exists = pathExists(global_jobs_path),
-        .meta_exists = pathExists(meta_path),
-        .meta_workspace_services_exists = pathExists(meta_workspace_services_path),
-        .meta_venom_packages_exists = pathExists(meta_venom_packages_path),
-        .local_venoms_exists = pathExists(local_venoms_path),
-        .global_venoms_exists = pathExists(global_venoms_path),
+        .control_root_exists = pathExists(control_root_path),
+        .control_packages_exists = pathExists(control_packages_path),
+        .control_runtimes_exists = pathExists(control_runtimes_path),
+        .catalog_root_exists = pathExists(catalog_root_path),
+        .catalog_packages_exists = pathExists(catalog_packages_path),
+        .catalog_bindings_exists = pathExists(catalog_bindings_path),
+        .public_venoms_exists = pathExists(public_venoms_path),
+        .legacy_services_chat_exists = pathExists(services_chat_path),
+        .legacy_services_jobs_exists = jobs_exists,
+        .legacy_global_chat_exists = pathExists(global_chat_path),
+        .legacy_global_jobs_exists = pathExists(global_jobs_path),
         .jobs_path = if (jobs_exists) try allocator.dupe(u8, services_jobs_path) else null,
         .job_dir_count = jobs.len,
         .jobs = jobs,
@@ -402,7 +402,7 @@ fn ensureWorkerRegistration(
 
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\"}}",
+        "{{\"agent_id\":\"{s}\",\"runtime_id\":\"{s}\"}}",
         .{ agent_id, worker_id },
     );
     defer allocator.free(payload);
@@ -418,7 +418,7 @@ fn sendWorkerHeartbeat(allocator: std.mem.Allocator, registration: WorkerRegistr
     defer allocator.free(heartbeat_path);
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\",\"ttl_ms\":30000}}",
+        "{{\"agent_id\":\"{s}\",\"runtime_id\":\"{s}\",\"ttl_ms\":30000}}",
         .{ registration.agent_id, registration.worker_id },
     );
     defer allocator.free(payload);
@@ -430,7 +430,7 @@ fn sendWorkerDetach(allocator: std.mem.Allocator, registration: WorkerRegistrati
     defer allocator.free(detach_path);
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"agent_id\":\"{s}\",\"worker_id\":\"{s}\"}}",
+        "{{\"agent_id\":\"{s}\",\"runtime_id\":\"{s}\"}}",
         .{ registration.agent_id, registration.worker_id },
     );
     defer allocator.free(payload);
@@ -439,9 +439,7 @@ fn sendWorkerDetach(allocator: std.mem.Allocator, registration: WorkerRegistrati
 
 fn findHomeServiceRoot(allocator: std.mem.Allocator, workspace_root: []const u8) !?[]u8 {
     const candidates = [_][]const u8{
-        "services/home",
-        "nodes/local/venoms/home",
-        "global/home",
+        ".spiderweb/control/workspace/home",
     };
     for (candidates) |candidate| {
         const path = try std.fs.path.join(allocator, &.{ workspace_root, candidate });
@@ -453,9 +451,7 @@ fn findHomeServiceRoot(allocator: std.mem.Allocator, workspace_root: []const u8)
 
 fn findWorkersServiceRoot(allocator: std.mem.Allocator, workspace_root: []const u8) !?[]u8 {
     const candidates = [_][]const u8{
-        "services/workers",
-        "nodes/local/venoms/workers",
-        "global/workers",
+        ".spiderweb/control/runtimes",
     };
     for (candidates) |candidate| {
         const path = try std.fs.path.join(allocator, &.{ workspace_root, candidate });
@@ -1024,49 +1020,49 @@ fn printScanReport(allocator: std.mem.Allocator, report: *const ScanReport) !voi
     defer allocator.free(root_line);
     try out.writeAll(root_line);
 
-    const services_line = try std.fmt.allocPrint(allocator, "  services: {s}\n", .{boolLabel(report.services_exists)});
-    defer allocator.free(services_line);
-    try out.writeAll(services_line);
+    const control_root_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/control: {s}\n", .{boolLabel(report.control_root_exists)});
+    defer allocator.free(control_root_line);
+    try out.writeAll(control_root_line);
 
-    const services_chat_line = try std.fmt.allocPrint(allocator, "  services/chat: {s}\n", .{boolLabel(report.services_chat_exists)});
-    defer allocator.free(services_chat_line);
-    try out.writeAll(services_chat_line);
+    const control_packages_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/control/packages: {s}\n", .{boolLabel(report.control_packages_exists)});
+    defer allocator.free(control_packages_line);
+    try out.writeAll(control_packages_line);
 
-    const services_jobs_line = try std.fmt.allocPrint(allocator, "  services/jobs: {s}\n", .{boolLabel(report.services_jobs_exists)});
-    defer allocator.free(services_jobs_line);
-    try out.writeAll(services_jobs_line);
+    const control_runtimes_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/control/runtimes: {s}\n", .{boolLabel(report.control_runtimes_exists)});
+    defer allocator.free(control_runtimes_line);
+    try out.writeAll(control_runtimes_line);
 
-    const services_venom_packages_line = try std.fmt.allocPrint(allocator, "  services/venom_packages: {s}\n", .{boolLabel(report.services_venom_packages_exists)});
-    defer allocator.free(services_venom_packages_line);
-    try out.writeAll(services_venom_packages_line);
+    const catalog_root_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/catalog: {s}\n", .{boolLabel(report.catalog_root_exists)});
+    defer allocator.free(catalog_root_line);
+    try out.writeAll(catalog_root_line);
 
-    const global_chat_line = try std.fmt.allocPrint(allocator, "  global/chat: {s}\n", .{boolLabel(report.global_chat_exists)});
-    defer allocator.free(global_chat_line);
-    try out.writeAll(global_chat_line);
+    const catalog_packages_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/catalog/packages.json: {s}\n", .{boolLabel(report.catalog_packages_exists)});
+    defer allocator.free(catalog_packages_line);
+    try out.writeAll(catalog_packages_line);
 
-    const global_jobs_line = try std.fmt.allocPrint(allocator, "  global/jobs: {s}\n", .{boolLabel(report.global_jobs_exists)});
-    defer allocator.free(global_jobs_line);
-    try out.writeAll(global_jobs_line);
+    const catalog_bindings_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/catalog/bindings.json: {s}\n", .{boolLabel(report.catalog_bindings_exists)});
+    defer allocator.free(catalog_bindings_line);
+    try out.writeAll(catalog_bindings_line);
 
-    const meta_line = try std.fmt.allocPrint(allocator, "  meta: {s}\n", .{boolLabel(report.meta_exists)});
-    defer allocator.free(meta_line);
-    try out.writeAll(meta_line);
+    const public_venoms_line = try std.fmt.allocPrint(allocator, "  /.spiderweb/venoms/VENOMS.json: {s}\n", .{boolLabel(report.public_venoms_exists)});
+    defer allocator.free(public_venoms_line);
+    try out.writeAll(public_venoms_line);
 
-    const meta_workspace_services_line = try std.fmt.allocPrint(allocator, "  meta/workspace_services.json: {s}\n", .{boolLabel(report.meta_workspace_services_exists)});
-    defer allocator.free(meta_workspace_services_line);
-    try out.writeAll(meta_workspace_services_line);
+    const legacy_services_chat_line = try std.fmt.allocPrint(allocator, "  legacy/services/chat: {s}\n", .{boolLabel(report.legacy_services_chat_exists)});
+    defer allocator.free(legacy_services_chat_line);
+    try out.writeAll(legacy_services_chat_line);
 
-    const meta_venom_packages_line = try std.fmt.allocPrint(allocator, "  meta/venom_packages.json: {s}\n", .{boolLabel(report.meta_venom_packages_exists)});
-    defer allocator.free(meta_venom_packages_line);
-    try out.writeAll(meta_venom_packages_line);
+    const legacy_services_jobs_line = try std.fmt.allocPrint(allocator, "  legacy/services/jobs: {s}\n", .{boolLabel(report.legacy_services_jobs_exists)});
+    defer allocator.free(legacy_services_jobs_line);
+    try out.writeAll(legacy_services_jobs_line);
 
-    const local_venoms_line = try std.fmt.allocPrint(allocator, "  nodes/local/venoms/VENOMS.json: {s}\n", .{boolLabel(report.local_venoms_exists)});
-    defer allocator.free(local_venoms_line);
-    try out.writeAll(local_venoms_line);
+    const legacy_global_chat_line = try std.fmt.allocPrint(allocator, "  legacy/global/chat: {s}\n", .{boolLabel(report.legacy_global_chat_exists)});
+    defer allocator.free(legacy_global_chat_line);
+    try out.writeAll(legacy_global_chat_line);
 
-    const global_venoms_line = try std.fmt.allocPrint(allocator, "  global/venoms/VENOMS.json: {s}\n", .{boolLabel(report.global_venoms_exists)});
-    defer allocator.free(global_venoms_line);
-    try out.writeAll(global_venoms_line);
+    const legacy_global_jobs_line = try std.fmt.allocPrint(allocator, "  legacy/global/jobs: {s}\n", .{boolLabel(report.legacy_global_jobs_exists)});
+    defer allocator.free(legacy_global_jobs_line);
+    try out.writeAll(legacy_global_jobs_line);
 
     if (report.jobs_path) |jobs_path| {
         const jobs_path_line = try std.fmt.allocPrint(allocator, "  jobs_path: {s}\n", .{jobs_path});
@@ -1213,11 +1209,11 @@ test "ensureAgentHome claims and bootstraps agent home directories" {
     const root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(root);
 
-    const home_control_dir = try std.fmt.allocPrint(allocator, "{s}/services/home/control", .{root});
+    const home_control_dir = try std.fmt.allocPrint(allocator, "{s}/.spiderweb/control/workspace/home/control", .{root});
     defer allocator.free(home_control_dir);
     try std.fs.cwd().makePath(home_control_dir);
 
-    const home_result_path = try std.fmt.allocPrint(allocator, "{s}/services/home/result.json", .{root});
+    const home_result_path = try std.fmt.allocPrint(allocator, "{s}/.spiderweb/control/workspace/home/result.json", .{root});
     defer allocator.free(home_result_path);
     try writeFileReplacing(
         home_result_path,
@@ -1250,15 +1246,15 @@ test "ensureWorkerRegistration claims worker node paths" {
     const root = try tmp_dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(root);
 
-    const workers_control_dir = try std.fmt.allocPrint(allocator, "{s}/services/workers/control", .{root});
+    const workers_control_dir = try std.fmt.allocPrint(allocator, "{s}/.spiderweb/control/runtimes/control", .{root});
     defer allocator.free(workers_control_dir);
     try std.fs.cwd().makePath(workers_control_dir);
 
-    const workers_result_path = try std.fmt.allocPrint(allocator, "{s}/services/workers/result.json", .{root});
+    const workers_result_path = try std.fmt.allocPrint(allocator, "{s}/.spiderweb/control/runtimes/result.json", .{root});
     defer allocator.free(workers_result_path);
     try writeFileReplacing(
         workers_result_path,
-        "{\"ok\":true,\"operation\":\"register\",\"result\":{\"ok\":true,\"worker_id\":\"spider-monkey-a\",\"agent_id\":\"spider-monkey\",\"node_id\":\"spider-monkey-a\",\"node_path\":\"/nodes/spider-monkey-a\",\"venoms\":[{\"venom_id\":\"memory\",\"path\":\"/nodes/spider-monkey-a/venoms/memory\"},{\"venom_id\":\"sub_brains\",\"path\":\"/nodes/spider-monkey-a/venoms/sub_brains\"}]}}",
+        "{\"ok\":true,\"operation\":\"register\",\"result\":{\"ok\":true,\"runtime_id\":\"spider-monkey-a\",\"agent_id\":\"spider-monkey\",\"node_id\":\"spider-monkey-a\",\"node_path\":\"/nodes/spider-monkey-a\",\"venoms\":[{\"venom_id\":\"memory\",\"path\":\"/nodes/spider-monkey-a/venoms/memory\"},{\"venom_id\":\"sub_brains\",\"path\":\"/nodes/spider-monkey-a/venoms/sub_brains\"}]}}",
     );
 
     var registration = (try ensureWorkerRegistration(allocator, root, "spider-monkey", "spider-monkey-a")).?;
