@@ -34,30 +34,27 @@ pub const POLICY_TEXT =
 
 pub const LOOP_CONTRACT_TEXT =
     \\Run cycle: Observe -> Decide -> Act -> Integrate -> Checkpoint.
-    \\When history is sparse, discover capabilities first via /meta/workspace_services.json and /meta/venom_packages.json, then /projects/<project_id>/meta/mounted_services.json, /nodes/local/venoms/VENOMS.json, and /global/venoms/VENOMS.json.
+    \\When history is sparse, discover capabilities first via /.spiderweb/catalog/packages.json, /.spiderweb/catalog/providers.json, /.spiderweb/catalog/bindings.json, and /.spiderweb/venoms/VENOMS.json.
     \\If blocked, continue using wait-capable filesystem operations.
-    \\Prefer single-source blocking reads for waits (job status/result); use events/control/wait.json + events/next.json only for one-of-many sources.
+    \\Prefer single-source blocking reads for waits (job status/result).
     \\If tool output is invalid or includes error.code/error.message, emit the smallest corrective tool step.
 ;
 
 pub const TOOL_CONTRACT_TEXT =
     \\Use only these runtime tools: file_read, file_write, file_list.
     \\Use JSON object args that match the tool schema; file_read/file_write support wait_until_ready (default true).
-    \\For file_* tool args, use canonical absolute paths. Project sandboxes expose a full rootfs at `/`; prefer `/services/*` for bound workspace venoms and `/nodes/local/venoms/*` for local catalog origins.
+    \\For file_* tool args, use canonical absolute paths. Project sandboxes expose a full rootfs at `/`; prefer `/.spiderweb/venoms/*` for public capabilities and `/.spiderweb/control/*` for workspace/runtime control.
     \\Do not use talk_* tools.
-    \\Do not call memory_* directly; register or discover a worker-owned memory venom path and use that path instead (for example `/nodes/<worker-node>/venoms/memory/control/*.json`).
-    \\Access web search, code search, terminal, agent management, and worker registration through `/services/*` when bound, otherwise `/nodes/local/venoms/*`. Access sub-brains through worker-owned node venoms.
-    \\Before claiming a capability is unavailable, check `/meta/workspace_services.json`, `/meta/venom_packages.json`, `/projects/<project_id>/meta/mounted_services.json`, `/nodes/local/venoms/VENOMS.json`, and `/global/venoms/VENOMS.json`.
-    \\Use project_namespace for project-shared capabilities and node scope for node-specific capabilities.
-    \\If `/services/web_search` or `/nodes/local/venoms/web_search` exists, do not claim you cannot do web search; invoke the web search service.
-    \\For "what workspaces/agents exist" requests, use `/services/workspaces/control/list.json` or `/nodes/local/venoms/workspaces/control/list.json`, and `/services/agents/control/list.json` or `/nodes/local/venoms/agents/control/list.json`, not directory-entry inference.
+    \\Do not call memory_* directly; register or discover a runtime-owned memory venom path and use that path instead (for example `/nodes/<runtime-id>/venoms/memory/control/*.json`).
+    \\Access terminal, git, and code search through `/.spiderweb/venoms/{terminal,git,search_code}`. Use `/.spiderweb/control/workspace/home` for home provisioning and `/.spiderweb/control/runtimes` for runtime attach/detach.
+    \\Before claiming a capability is unavailable, check `/.spiderweb/catalog/packages.json`, `/.spiderweb/catalog/providers.json`, `/.spiderweb/catalog/bindings.json`, and `/.spiderweb/venoms/VENOMS.json`.
     \\When presenting workspaces/agents to users, prefer human labels first (`name`) and include stable ids (`project_id`/`id`) only as secondary identifiers.
     \\Treat the workspace as the source of truth. Do not assume special bootstrap agents, hidden system workspaces, or provider-owned control channels exist unless the mounted filesystem exposes them.
-    \\When asked to create or select a workspace, prefer the explicit workspace services and mounted filesystem contract over any legacy Mother/system bootstrap flow.
+    \\When asked to create or select a workspace, prefer the explicit mounted filesystem contract over any legacy Mother/system bootstrap flow.
     \\To reply to user/admin, write text to `/nodes/local/venoms/chat/control/reply`.
     \\Treat `/nodes/local/venoms/chat/control/input` as inbound user/admin input channel (do not use it for outbound replies).
     \\Internal thought telemetry is exposed at `/nodes/local/venoms/thoughts/*` and is observational (not chat).
-    \\Use `/services/terminal/control/*.json` when bound, otherwise `/nodes/local/venoms/terminal/control/*.json`, when terminal execution is required.
+    \\Use `/.spiderweb/venoms/terminal/control/*.json` when terminal execution is required.
 ;
 
 pub const COMPLETION_CONTRACT_TEXT =

@@ -732,9 +732,9 @@ test "resolveToolPath uses agent root for relative paths and workspace root for 
     defer allocator.free(relative);
     try std.testing.expectEqualStrings("/tmp/runtime-agents/spider-monkey/CORE.md", relative);
 
-    const absolute = try resolveToolPath(@constCast(&worker), allocator, "/services/chat/control/reply");
+    const absolute = try resolveToolPath(@constCast(&worker), allocator, "/.spiderweb/venoms/terminal/control/invoke.json");
     defer allocator.free(absolute);
-    try std.testing.expectEqualStrings("/tmp/mount/services/chat/control/reply", absolute);
+    try std.testing.expectEqualStrings("/tmp/mount/.spiderweb/venoms/terminal/control/invoke.json", absolute);
 }
 
 test "ensureAbsoluteParentDir creates nested parent directories" {
